@@ -37,6 +37,8 @@
 (require 'tabulated-list)
 (require 'train-time)
 
+(declare-function train-time-alerts-summary "train-time-alerts" (routes stations now))
+
 ;;;; Customization
 
 (defcustom train-time-home nil
@@ -265,6 +267,15 @@ other journey beats are returned, sorted by departure."
       (train-time-mta-complex-name station)
     (train-time-station-display-name station)))
 
+(defun train-time-commute-routes ()
+  "Return the route IDs of this buffer's trips and of its two complexes."
+  (delete-dups
+   (append (mapcar #'train-time-leg-route-id (apply #'append train-time-commute--journeys))
+           (apply #'append
+                  (mapcar #'train-time-station-routes
+                          (append (train-time-mta-complex train-time-commute--origin)
+                                  (train-time-mta-complex train-time-commute--destination)))))))
+
 (defun train-time-commute--status (now)
   "Return the text shown below the trips at time NOW."
   (let ((feed-time (train-time-commute--feed-time))
@@ -291,6 +302,13 @@ other journey beats are returned, sorted by departure."
      (when errors
        (concat "\n" (propertize (format "Last update failed: %s (g to retry)" errors)
                                 'face 'train-time-error)))
+     (let ((alerts (and train-time-show-alerts (featurep 'train-time-alerts)
+                        (train-time-alerts-summary
+                         (train-time-commute-routes)
+                         (append (train-time-mta-complex train-time-commute--origin)
+                                 (train-time-mta-complex train-time-commute--destination))
+                         now))))
+       (when alerts (concat "\n" alerts)))
      (when train-time-commute--timer
        (format "\nAuto refresh every %ds" train-time-auto-refresh-interval))
      (format "\nTrips use one train or change once (allowing %d min); \
@@ -313,8 +331,13 @@ times are predictions, not a promise of the fastest trip."
           (insert "  No trips found with at most one change in the real-time feeds.\n"))
         (insert "\n" (train-time-commute--status now) "\n")))
     (setq mode-line-process
-          (cond ((> train-time-commute--pending 0) " updating")
-                ((train-time-commute--errors) " error")))
+          (concat (cond ((> train-time-commute--pending 0) " updating")
+                        ((train-time-commute--errors) " error"))
+                  (train-time--alerts-mode-line
+                   (train-time-commute-routes)
+                   (append (train-time-mta-complex train-time-commute--origin)
+                           (train-time-mta-complex train-time-commute--destination))
+                   now)))
     (force-mode-line-update)))
 
 ;;;; Fetching
@@ -380,7 +403,12 @@ A failed feed keeps its previous trips."
     (dolist (url urls)
       (funcall train-time-fetch-function url
                (lambda (result)
-                 (train-time-commute--handle-result buffer request url result))))))
+                 (train-time-commute--handle-result buffer request url result))))
+    (when train-time-show-alerts
+      (train-time-alerts-fetch
+       (lambda ()
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer (train-time-commute--render))))))))
 
 ;;;; Commands in the trips buffer
 
@@ -453,6 +481,7 @@ With no trip at point, open the board of the origin."
     "a" train-time-commute-toggle-auto-refresh
     "r" train-time-commute-reverse
     "b" train-time-commute-board
+    "A" train-time-alerts
     ,(kbd "RET") train-time-commute-describe
     "q" quit-window)
   "Evil normal-state bindings for `train-time-commute-mode'.")
@@ -462,6 +491,7 @@ With no trip at point, open the board of the origin."
     (define-key map "a" #'train-time-commute-toggle-auto-refresh)
     (define-key map "r" #'train-time-commute-reverse)
     (define-key map "b" #'train-time-commute-board)
+    (define-key map "A" #'train-time-alerts)
     (define-key map (kbd "RET") #'train-time-commute-describe)
     map)
   "Keymap for `train-time-commute-mode'.")

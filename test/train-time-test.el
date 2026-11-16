@@ -28,6 +28,10 @@
 (require 'cl-lib)
 (require 'train-time)
 
+;; Most tests answer every URL with a trip feed; alerts and outages
+;; have their own tests in train-time-alerts-test.el.
+(setq train-time-show-alerts nil)
+
 (defconst train-time-test--dir
   (file-name-directory (or load-file-name buffer-file-name)))
 
@@ -558,6 +562,51 @@ RECORDED names the recording, \"20261116\" by default."
            (list :data (train-time-test--fixture
                         (replace-regexp-in-string "\\`.*%2F" "" url)
                         "20261116-1612"))))
+
+;;;; Destination links
+
+(ert-deftest train-time-test-destination-link ()
+  (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+      train-time-test--fixture-time
+    (goto-char (point-min))
+    (let ((button (next-button (point))))
+      (should button)
+      (should (equal (button-label button) "34 St-Hudson Yards"))
+      (should (equal (button-get button 'train-time-destination) "726"))
+      (goto-char button)
+      (push-button)
+      (unwind-protect
+          (progn
+            (should (derived-mode-p 'train-time-mode))
+            (should (equal (train-time-station-id train-time--station) "726"))
+            (should (equal (buffer-name) "*train-time: 34 St-Hudson Yards*")))
+        (kill-buffer)))))
+
+(ert-deftest train-time-test-goto-destination-command ()
+  (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+      train-time-test--fixture-time
+    (goto-char (point-min))
+    (train-time-goto-destination)
+    (unwind-protect
+        (should (equal (train-time-station-id train-time--station) "726"))
+      (kill-buffer))))
+
+(ert-deftest train-time-test-terminating-not-linked ()
+  (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+      train-time-test--fixture-time
+    (train-time-toggle-terminating)
+    (goto-char (point-min))
+    (let ((found nil))
+      (while (and (not found) (not (eobp)))
+        (when (string-match-p "Terminates here"
+                              (buffer-substring (line-beginning-position)
+                                                (line-end-position)))
+          (setq found t)
+          (should-not (cl-some (lambda (pos) (button-at pos))
+                               (number-sequence (line-beginning-position)
+                                                (1- (line-end-position))))))
+        (forward-line 1))
+      (should found))))
 
 (defun train-time-test--headings ()
   "Return the complex board's group headings, without properties."

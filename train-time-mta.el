@@ -258,6 +258,10 @@ guessed.  The result is sorted by time."
                          :stop-id stop-id
                          :destination (and last-stop
                                            (train-time-mta--stop-name last-stop))
+                         :destination-id
+                         (and last-stop
+                              (let ((id (train-time-mta--parent-stop last-stop)))
+                                (and (train-time-mta-station id) id)))
                          :time (car event)
                          :event (cdr event)
                          :trip-id (plist-get trip :trip-id)
@@ -303,6 +307,146 @@ marks as skipped or gives no time are left out."
                       :calls (nreverse calls))
                 trips))))
     (nreverse trips)))
+
+;;;; Service alerts
+
+(defconst train-time-mta-alerts-feed "camsys%2Fsubway-alerts"
+  "Name of the subway service alerts feed, after the base URL.")
+
+(defun train-time-mta-alerts-url ()
+  "Return the URL of the subway service alerts feed."
+  (concat train-time-mta-feed-base-url train-time-mta-alerts-feed))
+
+(defun train-time-mta--alert-priority (entity)
+  "Return the priority in informed ENTITY's Mercury sort order, or 0.
+The sort order looks like \"MTASBWY:7:30\"; larger is more severe."
+  (let ((order (plist-get (plist-get entity :mercury) :sort-order)))
+    (or (and order (string-match ":\\([0-9]+\\)\\'" order)
+             (string-to-number (match-string 1 order)))
+        0)))
+
+(defun train-time-mta--alert (id alert)
+  "Return a `train-time-alert' for decoded ALERT with entity ID."
+  (let* ((mercury (plist-get alert :mercury))
+         (entities (plist-get alert :informed-entity))
+         (type (plist-get mercury :alert-type))
+         (zero-nil (lambda (n) (and n (> n 0) n))))
+    (make-train-time-alert
+     :id id
+     :type type
+     :planned (and type (string-prefix-p "Planned" type))
+     :header (train-time-gtfs-rt-text (plist-get alert :header-text))
+     :description (let ((text (train-time-gtfs-rt-text
+                               (plist-get alert :description-text))))
+                    (and text (not (string-blank-p text)) (string-trim text)))
+     :periods (mapcar (lambda (p) (cons (funcall zero-nil (plist-get p :start))
+                                        (funcall zero-nil (plist-get p :end))))
+                      (plist-get alert :active-period))
+     :period-text (train-time-gtfs-rt-text
+                   (plist-get mercury :human-readable-active-period))
+     :routes (delete-dups (delq nil (mapcar (lambda (e) (plist-get e :route-id))
+                                            entities)))
+     :stations (delete-dups
+                (delq nil (mapcar (lambda (e)
+                                    (let ((stop (plist-get e :stop-id)))
+                                      (and stop (train-time-mta--parent-stop stop))))
+                                  entities)))
+     :priority (apply #'max 0 (mapcar #'train-time-mta--alert-priority entities))
+     :updated (funcall zero-nil (plist-get mercury :updated-at)))))
+
+(defun train-time-mta-alerts (feed)
+  "Return the `train-time-alert's in decoded alerts FEED."
+  (mapcar (lambda (entry) (train-time-mta--alert (car entry) (cdr entry)))
+          (train-time-gtfs-rt-alerts feed)))
+
+(defun train-time-mta-alert-local-p (alert)
+  "Return non-nil if ALERT only matters at the stations it names.
+Station notices (e.g. a closed entrance) and boarding changes do not
+affect riders elsewhere on the line, unlike skipped stops."
+  (let ((type (train-time-alert-type alert)))
+    (and type (train-time-alert-stations alert)
+         (string-match-p "Station Notice\\|Boarding Change" type))))
+
+(defun train-time-mta-alert-affects-p (alert route-ids)
+  "Return non-nil if ALERT concerns any of ROUTE-IDS.
+Express variants count as their route, so an alert for the 7 also
+concerns the <7>."
+  (let ((families (mapcar #'train-time-mta--family route-ids)))
+    (cl-some (lambda (r) (member (train-time-mta--family r) families))
+             (train-time-alert-routes alert))))
+
+;;;; Elevator and escalator outages
+
+(defconst train-time-mta-outages-feed "nyct%2Fnyct_ene.json"
+  "Name of the elevator and escalator outages feed (JSON).")
+
+(defconst train-time-mta-equipment-feed "nyct%2Fnyct_ene_equipments.json"
+  "Name of the elevator and escalator list (JSON).")
+
+(defun train-time-mta-outages-url ()
+  "Return the URL of the elevator and escalator outages feed."
+  (concat train-time-mta-feed-base-url train-time-mta-outages-feed))
+
+(defun train-time-mta-equipment-url ()
+  "Return the URL of the elevator and escalator list."
+  (concat train-time-mta-feed-base-url train-time-mta-equipment-feed))
+
+(defun train-time-mta--json-field (record field)
+  "Return string FIELD of JSON RECORD, or nil if it is missing or empty."
+  (let ((value (alist-get field record)))
+    (and (stringp value) (not (string-blank-p value)) (string-trim value))))
+
+(defun train-time-mta--ene-time (text)
+  "Return the POSIX time of TEXT like \"11/17/2026 06:00:00 PM\", or nil.
+The time is in New York."
+  (when (and text
+             (string-match "\\`\\([0-9]+\\)/\\([0-9]+\\)/\\([0-9]\\{4\\}\\) +\\([0-9]+\\):\\([0-9]+\\)\\(?::\\([0-9]+\\)\\)? *\\([AP]M\\)"
+                           text))
+    (let* ((n (lambda (i) (string-to-number (or (match-string i text) "0"))))
+           (hour (mod (funcall n 4) 12)))
+      (when (equal (match-string 7 text) "PM") (cl-incf hour 12))
+      (float-time (encode-time (list (funcall n 6) (funcall n 5) hour
+                                     (funcall n 2) (funcall n 1) (funcall n 3)
+                                     nil -1 train-time-mta-time-zone))))))
+
+(defun train-time-mta-equipment-complexes (equipment)
+  "Return a hash table from equipment number to station complex ID.
+EQUIPMENT is the parsed equipment list, a list of alists."
+  (let ((table (make-hash-table :test #'equal)))
+    (dolist (record equipment)
+      (let ((number (train-time-mta--json-field record 'equipmentno))
+            (complex (train-time-mta--json-field record 'stationcomplexid)))
+        (when (and number complex)
+          (puthash number complex table))))
+    table))
+
+(defun train-time-mta-outages (outages complexes)
+  "Return the elevator and escalator outages in parsed OUTAGES.
+COMPLEXES maps equipment numbers to station complex IDs, as returned
+by `train-time-mta-equipment-complexes'.  Each outage is a plist
+with :equipment, :kind (`elevator' or `escalator'), :complex,
+:serving, :ada, :reason, :since, :until (POSIX times or nil) and
+:upcoming."
+  (delq nil
+        (mapcar
+         (lambda (record)
+           (let ((number (train-time-mta--json-field record 'equipment)))
+             (when number
+               (list :equipment number
+                     :kind (pcase (train-time-mta--json-field record 'equipmenttype)
+                             ("EL" 'elevator) ("ES" 'escalator) (_ 'equipment))
+                     :complex (gethash number complexes)
+                     :station (train-time-mta--json-field record 'station)
+                     :serving (train-time-mta--json-field record 'serving)
+                     :ada (equal (train-time-mta--json-field record 'ADA) "Y")
+                     :reason (train-time-mta--json-field record 'reason)
+                     :since (train-time-mta--ene-time
+                             (train-time-mta--json-field record 'outagedate))
+                     :until (train-time-mta--ene-time
+                             (train-time-mta--json-field record 'estimatedreturntoservice))
+                     :upcoming (equal (train-time-mta--json-field record 'isupcomingoutage)
+                                      "Y")))))
+         outages)))
 
 (provide 'train-time-mta)
 ;;; train-time-mta.el ends here

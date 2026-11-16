@@ -37,6 +37,12 @@
 ;;   l  filter line         c  clear filters
 ;;   t  toggle terminating  S  select station
 ;;   RET  show trip details   m  show on OpenStreetMap (osm.el)
+;;   D  board of the train's destination (or click the destination)
+;;   A  service alerts for the station's lines
+;;
+;; Below the trains the board lists MTA service alerts in effect for
+;; its lines and elevator or escalator outages at the station (see
+;; `train-time-show-alerts').
 ;;
 ;; At a station with free transfers the board covers the whole
 ;; complex (see `train-time-board-scope'), grouped by platform and
@@ -119,6 +125,15 @@ limit, `train-time-max-rows' trains and folding it away."
   :type '(choice (const :tag "No limit" nil) natnum)
   :group 'train-time)
 
+(defcustom train-time-show-alerts t
+  "Non-nil means boards and trip lists show alerts for their lines.
+These are MTA's service alerts in effect (delays, suspensions,
+reroutes and planned work) and elevator and escalator outages at
+the stations.  They are downloaded with the trains and reused for
+`train-time-alerts-refresh-interval' seconds."
+  :type 'boolean
+  :group 'train-time)
+
 (defvar train-time-fetch-function #'train-time-http-fetch
   "Function used to fetch feeds, called as (FUNCTION URL CALLBACK).
 CALLBACK receives a plist with either :data (unibyte string) or
@@ -141,6 +156,9 @@ CALLBACK receives a plist with either :data (unibyte string) or
 
 (defface train-time-group-count '((t :inherit shadow))
   "Face for the train counts on complex board headings.")
+
+(defface train-time-destination '((t))
+  "Face for destinations on boards, which are links to their boards.")
 
 ;;;; HTTP
 
@@ -254,6 +272,28 @@ hide them; groups not listed show `train-time-group-max-rows'.")
         ((<= minutes 0) "now")
         (t (format "%d min" minutes))))
 
+(defun train-time--destination-cell (arrival assigned)
+  "Return ARRIVAL's Destination cell, a link to the destination's board.
+ASSIGNED nil dims it as a scheduled trip."
+  (let ((id (train-time-arrival-destination-id arrival))
+        (name (if (train-time-arrival-terminating arrival)
+                  "Terminates here"
+                (or (train-time-arrival-destination arrival) "?")))
+        (face (if assigned 'train-time-destination 'train-time-scheduled)))
+    (if (or (null id) (train-time-arrival-terminating arrival))
+        (propertize name 'face face)
+      (list name
+            'face face
+            'mouse-face 'highlight
+            'follow-link t
+            'train-time-destination id
+            'action #'train-time--destination-button
+            'help-echo (format "mouse-1, RET: trains at %s" name)))))
+
+(defun train-time--destination-button (button)
+  "Show the board of the destination BUTTON links to."
+  (train-time-goto-destination (button-get button 'train-time-destination)))
+
 (defun train-time--entry (arrival now)
   "Return a `tabulated-list-entries' element for ARRIVAL at time NOW."
   (let* ((assigned (train-time-arrival-assigned arrival))
@@ -265,9 +305,7 @@ hide them; groups not listed show `train-time-group-max-rows'.")
            (train-time--route-label arrival)
            (funcall dim (train-time--service-label arrival))
            (funcall dim (train-time--direction-label arrival))
-           (funcall dim (if (train-time-arrival-terminating arrival)
-                            "Terminates here"
-                          (or (train-time-arrival-destination arrival) "?")))
+           (train-time--destination-cell arrival assigned)
            (funcall dim (if (eq (train-time-arrival-event arrival) 'departure)
                             "Departs" "Arrives"))
            (funcall dim (train-time-format-clock (train-time-arrival-time arrival)
@@ -320,6 +358,10 @@ hide them; groups not listed show `train-time-group-max-rows'.")
        (concat "\n" (propertize (format "Last update failed: %s (g to retry)"
                                         train-time--error)
                                 'face 'train-time-error)))
+     (let ((alerts (and train-time-show-alerts (featurep 'train-time-alerts)
+                        (train-time-alerts-summary (train-time--routes)
+                                                   train-time--stations now))))
+       (when alerts (concat "\n" alerts)))
      (let ((hidden (and (not train-time--show-terminating)
                         (cl-count-if #'train-time-arrival-terminating
                                      train-time--arrivals))))
@@ -335,6 +377,20 @@ hide them; groups not listed show `train-time-group-max-rows'.")
            "\nTAB more trains or fold   S-TAB fold all   gj/gk next/previous group"
          "\nTAB more trains or fold   S-TAB fold all   M-n/M-p next/previous group"))
      "\n" train-time-mta-attribution)))
+
+(defun train-time--routes ()
+  "Return the route IDs serving this board's stations."
+  (delete-dups (apply #'append (mapcar #'train-time-station-routes
+                                       train-time--stations))))
+
+(defun train-time--alerts-mode-line (routes stations now)
+  "Return a mode line note of alerts in effect for ROUTES at NOW, or nil.
+STATIONS are the stations shown, which leave out other stations' notices."
+  (let ((count (and train-time-show-alerts (featurep 'train-time-alerts)
+                    (train-time-alerts-count routes stations now))))
+    (and count (> count 0)
+         (propertize (format " ⚠%d" count) 'face 'warning
+                     'help-echo "Service alerts in effect"))))
 
 (defun train-time--complex-p ()
   "Return non-nil if this board lists several stations of a complex."
@@ -468,11 +524,13 @@ Set `tabulated-list-entries' to the entries printed."
                     "  No upcoming trains in the feed.\n")))
         (insert "\n" (train-time--status now) "\n")))
     (setq mode-line-process
-          (cond (train-time--loading " updating")
-                (train-time--error " error")
-                ((and train-time--feed-time
-                      (> (- now train-time--feed-time) train-time-stale-threshold))
-                 " stale")))
+          (concat (cond (train-time--loading " updating")
+                        (train-time--error " error")
+                        ((and train-time--feed-time
+                              (> (- now train-time--feed-time) train-time-stale-threshold))
+                         " stale"))
+                  (train-time--alerts-mode-line (train-time--routes)
+                                                train-time--stations now)))
     (force-mode-line-update)))
 
 ;;;; Fetching
@@ -549,7 +607,12 @@ does not blank a board that other feeds still update."
     (dolist (url urls)
       (funcall train-time-fetch-function url
                (lambda (result)
-                 (train-time--handle-result buffer request url result))))))
+                 (train-time--handle-result buffer request url result))))
+    (when train-time-show-alerts
+      (train-time-alerts-fetch
+       (lambda ()
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer (train-time--render))))))))
 
 ;;;; Auto refresh
 
@@ -636,14 +699,32 @@ With positive ARG enable it, with zero or negative ARG disable it."
   (setq train-time--filters nil)
   (train-time--render))
 
+(defun train-time-goto-destination (&optional id)
+  "Show the board of the station ID, by default the destination at point.
+Clicking a destination does the same."
+  (interactive)
+  (let* ((id (or id
+                 (let ((entry (tabulated-list-get-id)))
+                   (and entry
+                        (train-time-arrival-destination-id
+                         (train-time--arrival-at entry))))
+                 (user-error "No destination on this line")))
+         (station (or (train-time-mta-station id)
+                      (user-error "Unknown station %s" id))))
+    (train-time--show station)))
+
+(defun train-time--arrival-at (id)
+  "Return the arrival whose entry ID is (TRIP-ID . STOP-ID)."
+  (cl-find-if (lambda (a)
+                (and (equal (train-time-arrival-trip-id a) (car id))
+                     (equal (train-time-arrival-stop-id a) (cdr id))))
+              train-time--arrivals))
+
 (defun train-time-describe-trip ()
   "Show details of the trip at point."
   (interactive)
   (let* ((id (or (tabulated-list-get-id) (user-error "No train on this line")))
-         (arrival (cl-find-if (lambda (a)
-                                (and (equal (train-time-arrival-trip-id a) (car id))
-                                     (equal (train-time-arrival-stop-id a) (cdr id))))
-                              train-time--arrivals)))
+         (arrival (train-time--arrival-at id)))
     (message "Trip %s, platform %s, train %s, %s, %s"
              (train-time-arrival-trip-id arrival)
              (train-time-arrival-stop-id arrival)
@@ -768,6 +849,8 @@ mode body, which runs before Evil picks the buffer's initial state."
     "t" train-time-toggle-terminating
     "S" train-time-select-station
     "m" train-time-osm
+    "gd" train-time-goto-destination
+    "A" train-time-alerts
     ,(kbd "TAB") train-time-cycle-group
     "za" train-time-cycle-group
     ,(kbd "<backtab>") train-time-cycle-all-groups
@@ -790,6 +873,8 @@ mode body, which runs before Evil picks the buffer's initial state."
     (define-key map "t" #'train-time-toggle-terminating)
     (define-key map "S" #'train-time-select-station)
     (define-key map "m" #'train-time-osm)
+    (define-key map "D" #'train-time-goto-destination)
+    (define-key map "A" #'train-time-alerts)
     (define-key map (kbd "TAB") #'train-time-cycle-group)
     (define-key map (kbd "<backtab>") #'train-time-cycle-all-groups)
     (define-key map (kbd "M-n") #'train-time-next-group)
@@ -824,6 +909,12 @@ mode body, which runs before Evil picks the buffer's initial state."
   "Navigate the transit network diagram." t)
 (autoload 'train-time-osm "train-time-osm"
   "Show a station and its line on OpenStreetMap using osm.el." t)
+(autoload 'train-time-alerts "train-time-alerts"
+  "List service alerts for some lines." t)
+(autoload 'train-time-alerts-fetch "train-time-alerts"
+  "Download alerts and outages if needed, then call CALLBACK once.")
+(declare-function train-time-alerts-summary "train-time-alerts" (routes stations now))
+(declare-function train-time-alerts-count "train-time-alerts" (routes stations now))
 (autoload 'train-time-home-to-work "train-time-commute"
   "List the next trips from home to work." t)
 (autoload 'train-time-work-to-home "train-time-commute"

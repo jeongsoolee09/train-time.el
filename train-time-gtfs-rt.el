@@ -22,11 +22,14 @@
 ;; Schema for the subset of GTFS-Realtime used by train-time, following
 ;; https://gtfs.org/realtime/reference/ (gtfs-realtime.proto), plus
 ;; the NYCT extensions (field 1001) documented in MTA's
-;; nyct-subway.proto.  Fields not listed here are skipped by the
-;; decoder, so the schema can grow as features need it.
+;; nyct-subway.proto and the Mercury alert extensions (also field
+;; 1001, on Alert and EntitySelector) from MTA's
+;; gtfs-realtime-service-status.proto.  Fields not listed here are
+;; skipped by the decoder, so the schema can grow as features need it.
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'train-time-pb)
 
 (defconst train-time-gtfs-rt-schema
@@ -44,7 +47,8 @@
      (1 :id string)
      (2 :is-deleted bool)
      (3 :trip-update TripUpdate)
-     (4 :vehicle VehiclePosition))
+     (4 :vehicle VehiclePosition)
+     (5 :alert Alert))
     (TripUpdate
      (1 :trip TripDescriptor)
      (2 :stop-time-update StopTimeUpdate repeated)
@@ -81,7 +85,40 @@
      (3 :current-stop-sequence uint32)
      (4 :current-status enum)
      (5 :timestamp uint64)
-     (7 :stop-id string)))
+     (7 :stop-id string))
+    (Alert
+     (1 :active-period TimeRange repeated)
+     (5 :informed-entity EntitySelector repeated)
+     (6 :cause enum)
+     (7 :effect enum)
+     (8 :url TranslatedString)
+     (10 :header-text TranslatedString)
+     (11 :description-text TranslatedString)
+     (1001 :mercury MercuryAlert))
+    (TimeRange
+     (1 :start uint64)
+     (2 :end uint64))
+    (EntitySelector
+     (1 :agency-id string)
+     (2 :route-id string)
+     (3 :route-type int32)
+     (5 :stop-id string)
+     (6 :direction-id uint32)
+     (1001 :mercury MercuryEntitySelector))
+    (MercuryEntitySelector
+     (1 :sort-order string))
+    (TranslatedString
+     (1 :translation Translation repeated))
+    (Translation
+     (1 :text string)
+     (2 :language string))
+    (MercuryAlert
+     (1 :created-at uint64)
+     (2 :updated-at uint64)
+     (3 :alert-type string)
+     (7 :display-before-active uint64)
+     (8 :human-readable-active-period TranslatedString)
+     (10 :affected-stations EntitySelector repeated)))
   "Protobuf schema for GTFS-Realtime with NYCT extensions.")
 
 (defconst train-time-gtfs-rt-stop-skipped 1
@@ -102,6 +139,28 @@
                       (and (not (plist-get entity :is-deleted))
                            (plist-get entity :trip-update)))
                     (plist-get feed :entity))))
+
+(defun train-time-gtfs-rt-alerts (feed)
+  "Return the Alert plists of decoded FEED with their entity IDs.
+Each element is (ID . ALERT); deleted entities are skipped."
+  (delq nil (mapcar (lambda (entity)
+                      (and (not (plist-get entity :is-deleted))
+                           (plist-get entity :alert)
+                           (cons (plist-get entity :id) (plist-get entity :alert))))
+                    (plist-get feed :entity))))
+
+(defun train-time-gtfs-rt-text (translated &optional language)
+  "Return the text of TranslatedString TRANSLATED in LANGUAGE.
+LANGUAGE defaults to \"en\".  Falls back to an untagged translation,
+then to the first one; returns nil if there is none."
+  (let ((translations (plist-get translated :translation))
+        (language (or language "en")))
+    (plist-get (or (cl-find language translations
+                            :key (lambda (tr) (plist-get tr :language)) :test #'equal)
+                   (cl-find-if (lambda (tr) (member (plist-get tr :language) '(nil "")))
+                               translations)
+                   (car translations))
+               :text)))
 
 (defun train-time-gtfs-rt-event-time (stu)
   "Return (TIME . EVENT) for StopTimeUpdate STU, or nil if unknown.

@@ -59,6 +59,8 @@ TIME is nil when no prediction is available; it is never invented."
   (direction-label nil :documentation "Rider-facing direction label.")
   (stop-id nil :documentation "Platform identifier, e.g. \"701S\".")
   (destination nil :documentation "Name of the last stop of the trip.")
+  (destination-id nil :documentation
+                  "Station identifier of the last stop, if it is known.")
   (time nil :documentation "Predicted POSIX time, or nil.")
   (event nil :documentation "`arrival' or `departure'.")
   (trip-id nil :documentation "Trip identifier from the feed.")
@@ -67,6 +69,36 @@ TIME is nil when no prediction is available; it is never invented."
             "Non-nil if a physical train is assigned to the trip.
 Unassigned trips are scheduled departures, not tracked trains.")
   (terminating nil :documentation "Non-nil if the trip ends at this stop."))
+
+(cl-defstruct (train-time-alert (:copier nil))
+  "A service alert: a disruption, planned work or notice."
+  (id nil :documentation "Stable identifier from the feed.")
+  (type nil :documentation "Operator's category, e.g. \"Delays\".")
+  (planned nil :documentation "Non-nil for planned work announced ahead.")
+  (header nil :documentation "One-line summary.")
+  (description nil :documentation "Longer text, or nil.")
+  (periods nil :documentation
+           "List of (START . END) POSIX times; END is nil if open-ended.")
+  (period-text nil :documentation "The periods in words, or nil.")
+  (routes nil :documentation "Route identifiers affected.")
+  (stations nil :documentation "Station identifiers named, if any.")
+  (priority 0 :documentation "Severity; larger is more severe.")
+  (updated nil :documentation "POSIX time of the last update, or nil."))
+
+(defun train-time-alert-active-p (alert now)
+  "Return non-nil if ALERT is in effect at NOW.
+An alert without periods is always in effect."
+  (let ((periods (train-time-alert-periods alert)))
+    (or (null periods)
+        (cl-some (lambda (p) (and (<= (or (car p) 0) now)
+                                  (or (null (cdr p)) (< now (cdr p)))))
+                 periods))))
+
+(defun train-time-alert-next-start (alert now)
+  "Return when ALERT next takes effect after NOW, or nil."
+  (let ((starts (delq nil (mapcar (lambda (p) (and (car p) (> (car p) now) (car p)))
+                                  (train-time-alert-periods alert)))))
+    (and starts (apply #'min starts))))
 
 (defun train-time-station-display-name (station)
   "Return STATION's unique label, falling back to its name."

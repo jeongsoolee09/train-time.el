@@ -399,8 +399,8 @@ the same complex."
 
 (defun train-time-map--help-text ()
   (if (bound-and-true-p evil-local-mode)
-      "j/k along the line   h/l switch service   RET arrivals   L line   t transfer   m OSM   q quit"
-    "C-n/C-p along the line   C-f/C-b switch service   RET arrivals   L line   t transfer   m OSM   q quit"))
+      "j/k along the line   h/l switch service   RET arrivals   L line   t transfer   A alerts   m OSM   q quit"
+    "C-n/C-p along the line   C-f/C-b switch service   RET arrivals   L line   t transfer   A alerts   m OSM   q quit"))
 
 (defun train-time-map--render ()
   "Redraw the map and put point on the selected node."
@@ -639,6 +639,7 @@ Where it appears depends on `train-time-map-board-display'."
     "t" train-time-map-transfer
     ,(kbd "RET") train-time-map-open-board
     "m" train-time-osm
+    "A" train-time-alerts
     "q" quit-window)
   "Evil normal-state bindings for `train-time-map-mode'.")
 
@@ -663,6 +664,7 @@ Where it appears depends on `train-time-map-board-display'."
                (">" . train-time-map-last)
                (,(kbd "RET") . train-time-map-open-board)
                ("m" . train-time-osm)
+               ("A" . train-time-alerts)
                ("L" . train-time-map-choose-line)
                ("t" . train-time-map-transfer)
                ([mouse-1] . train-time-map-mouse-select)))

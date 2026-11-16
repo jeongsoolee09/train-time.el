@@ -13,7 +13,9 @@ GTFS-Realtime feeds.  No API key or account is needed.
 =M-x train-time-map= is a keyboard-driven text diagram of each line in
 the style of =undo-tree-visualize=.  =M-x train-time-home-to-work= and
 =M-x train-time-work-to-home= list the next trains between two saved
-stations.  Seoul, Tokyo, favorites, graphical maps and general route
+stations.  Boards and trips show the service alerts, planned work and
+elevator/escalator outages that concern them, and =M-x
+train-time-alerts= lists a line's alerts in full.  Seoul, Tokyo, favorites, graphical maps and general route
 planning are planned but not implemented yet; see [[*Roadmap][Roadmap]].
 
 * Requirements
@@ -68,12 +70,19 @@ variants); it is blank for the others.
 | =S=   | Switch to another station            |
 | =RET= | Show trip details in the echo area   |
 | =m=   | Show the station on OpenStreetMap    |
+| =D=   | Open the board of the destination    |
+| =A=   | List the service alerts of the lines |
 | =q=   | Quit window                          |
 
 *Evil users:* when Evil is loaded the buffer starts in normal state,
 =j=/=k=/=gg=/=G= move as usual, =g r= refreshes, and the other keys
 above work unchanged in normal state.  Set =train-time-evil-bindings=
-to nil to opt out.
+to nil to opt out.  In normal state =g d= opens the destination's
+board.
+
+Destinations are links: click one, or press =RET= on it, to open the
+board of that station.  Trains that end at the station shown are not
+linked.
 
 ** Station complexes
 
@@ -269,6 +278,7 @@ buffer looks like:
 | =r=                | Reverse: work → home, or home → work             |
 | =b=                | Board of the station where the trip at point starts |
 | =a=                | Toggle auto refresh                              |
+| =A=                | Service alerts of the trip's lines               |
 | =q=                | Quit                                             |
 
 How trips are found:
@@ -288,6 +298,61 @@ How trips are found:
 - Times are predictions.  The list is not a promise of the fastest
   journey: delays, transfer walks and service changes are not known.
 
+** Service alerts and elevator outages
+
+Below a board or trip list, a footer summarizes what MTA publishes
+about its lines and stations:
+
+#+begin_example
+Service alerts in effect (2):
+  7 Planned - Stops Skipped: In Queens, Flushing-bound 7 skips 52 St and 69 St
+  All trains at Woodside-61 St board from the Manhattan-bound platform
+  7 Planned - Express to Local: In Queens, all Manhattan-bound 7 <7>
+  local/express trains stop at 74 St-Broadway
+5 planned service changes coming up.
+  Elevator EL414 out of service (East of Main St & Roosevelt Ave to
+  Manhattan-bound platform), expected back Nov 30 23:59: capital replacement
+A lists the lines’ alerts.
+#+end_example
+
+- *Alerts in effect* — delays, suspensions, reroutes and planned work
+  happening now, most severe first.  The mode line shows their count,
+  e.g. =⚠2=.
+- *Planned service changes* — planned work that has not started yet,
+  counted only; =A= lists them.
+- *Elevator and escalator outages* at the station or complex, current
+  ones only, with the reason and when MTA expects them back.
+  Outages of elevators that make the station accessible are
+  highlighted.
+
+Station notices and boarding changes that name stations are shown on
+those stations' boards only.  =A= (or =M-x train-time-alerts=) opens a
+buffer of every alert for the lines at point; called from elsewhere or
+with a prefix argument it asks for lines (empty for all):
+
+| Key (Emacs / Evil)        | Action                              |
+|---------------------------+-------------------------------------|
+| =TAB=, =RET= / =za=       | Show or hide an alert's details     |
+| =S-TAB= / =zM=            | Show or hide every alert's details  |
+| =n= / =p= (=g j= / =g k=) | Next / previous alert               |
+| =g= / =g r=               | Refresh                             |
+| =q=                       | Quit                                |
+
+Alerts are downloaded at most every =train-time-alerts-refresh-interval=
+(120 s) and shared by all buffers; refreshing a board fetches them
+again.  If they cannot be downloaded the boards still work and say so.
+The list of elevators (about 650 KB, needed to know which station an
+outage is at) is downloaded once a day.  Set =train-time-show-alerts=
+to nil to leave all of this out.
+
+Sources, all public and keyless: MTA's
+[[https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts][subway alerts]]
+(GTFS-Realtime with MTA's Mercury extensions) and its
+[[https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fnyct_ene.json][outage]]
+and
+[[https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fnyct_ene_equipments.json][equipment]]
+feeds.
+
 ** Customization
 
 =M-x customize-group RET train-time= — notable options:
@@ -304,6 +369,7 @@ How trips are found:
 - =train-time-osm-zoom= (16)
 - =train-time-home=, =train-time-work=, =train-time-transfer-time=
   (180 s), =train-time-commute-max-rows= (12)
+- =train-time-show-alerts=, =train-time-alerts-refresh-interval= (120 s)
 - =train-time-evil-bindings=
 
 * Design
@@ -319,6 +385,7 @@ How trips are found:
 | =train-time-map.el=     | =M-x train-time-map= text network navigator               |
 | =train-time-osm.el=     | Optional osm.el view: GPX export + =osm-open=/=osm-goto=  |
 | =train-time-commute.el= | Home/work trips: one-change search over live trip updates |
+| =train-time-alerts.el=  | Service alerts and elevator outages: cache, footers, list |
 
 Principles kept so far:
 
@@ -368,7 +435,9 @@ make test      # ERT suite; no network access
 Tests use recorded, unmodified MTA responses in =test/fixtures/= (the
 1-7 feed, the BDFM and NQRW feeds for Coney Island, a station served by
 two feeds, and the 1-7, ACE and NQRW feeds recorded together for the
-Times Sq complex) and an injected clock, so they are deterministic.
+Times Sq complex, the subway alerts feed and the elevator outages) and
+an injected clock, so they are deterministic.  The elevator equipment
+list is trimmed to the Flushing, Grand Central and Times Sq complexes.
 The generator is tested against a tiny made-up GTFS feed.
 
 * Roadmap
