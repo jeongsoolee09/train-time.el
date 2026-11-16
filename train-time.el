@@ -6,7 +6,7 @@
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: convenience, comm
-;; URL: https://github.com/train-time-el/train-time
+;; URL: https://github.com/jeongsoolee09/train-time.el
 
 ;; This file is not part of GNU Emacs.
 
