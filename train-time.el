@@ -215,6 +215,16 @@ See `train-time-compact-width'."
                (/= train-time--width (window-body-width window)))
       (funcall train-time--redraw-function))))
 
+(defun train-time--narrow-frame-p ()
+  "Return non-nil if the frame is too narrow for long echo area messages."
+  (train-time--compact-p (frame-width)))
+
+(defun train-time--echo (text)
+  "Show TEXT in the echo area, filled to the frame in narrow frames."
+  (message "%s" (if (train-time--narrow-frame-p)
+                    (train-time--fill text (max 20 (1- (frame-width))))
+                  text)))
+
 (defun train-time--watch-width (redraw)
   "Call REDRAW whenever the width of the current buffer's window differs.
 REDRAW must set `train-time--width'."
@@ -241,6 +251,22 @@ every line is indented by that many spaces instead."
              (string-trim-right (buffer-string)))))))
    (split-string text "\n")
    "\n"))
+
+(defun train-time--hang (text width indent)
+  "Return one-line TEXT filled to WIDTH, continuation lines indented INDENT.
+Spacing within TEXT is kept."
+  (let ((lead (progn (string-match "\\` *" text) (match-end 0))))
+    (with-temp-buffer
+      (let ((fill-column width)
+            (fill-prefix (make-string indent ?\s))
+            (adaptive-fill-mode nil))
+        ;; Filling drops the first line's indentation, so hold its place.
+        (insert (make-string lead ?x) (substring text lead))
+        (fill-region (point-min) (point-max) nil t)
+        (goto-char (point-min))
+        (delete-char lead)
+        (insert (substring text 0 lead))
+        (string-trim-right (buffer-string))))))
 
 (defun train-time--button (label command &rest props)
   "Return LABEL as a button running COMMAND interactively.
@@ -439,9 +465,10 @@ ASSIGNED nil dims it as a scheduled trip."
     (list (cons (train-time-arrival-trip-id arrival)
                 (train-time-arrival-stop-id arrival))
           (if train-time--compact
-              (vector (train-time--route-label arrival)
-                      (train-time--destination-cell arrival assigned)
-                      time in)
+              (vconcat (list (train-time--route-label arrival)
+                             (train-time--destination-cell arrival assigned))
+                       (and (train-time--clock-column-p) (list time))
+                       (list in))
             (vector
              (train-time--route-label arrival)
              (funcall dim (train-time--service-label arrival))
@@ -465,15 +492,23 @@ ASSIGNED nil dims it as a scheduled trip."
    ("Train" 0 nil)]
   "Board columns in the usual layout.")
 
+(defun train-time--clock-column-p ()
+  "Return non-nil if the compact board has room for the Time column.
+Below 44 columns, as on a phone, the destination needs the room more;
+tapping a train still shows its time."
+  (>= (or train-time--width 80) 44))
+
 (defun train-time--set-format (width)
   "Set the board's columns for a window WIDTH columns wide."
   (let ((format (if train-time--compact
                     ;; Padding, Line, Time and In take 21 columns, and
                     ;; the last column must not reach the window edge.
-                    (vector '("Line" 5 nil)
-                            (list "Destination" (max 8 (- width 22)) nil)
-                            '("Time" 5 nil)
-                            '("In" 7 nil :right-align t))
+                    (vconcat (list '("Line" 5 nil))
+                             (if (train-time--clock-column-p)
+                                 (list (list "Destination" (max 8 (- width 22)) nil)
+                                       '("Time" 5 nil))
+                               (list (list "Destination" (max 8 (- width 16)) nil)))
+                             (list '("In" 7 nil :right-align t)))
                   train-time--wide-format)))
     (unless (equal format tabulated-list-format)
       (setq tabulated-list-format format)
@@ -602,22 +637,30 @@ terminal, where every train in that direction ends its trip."
 (defun train-time--group-heading (station label state shown total)
   "Return the heading of a group of STATION toward LABEL.
 STATE is the group's entry in `train-time--group-states'; SHOWN of
-TOTAL trains are listed, or would be if the group were unfolded."
+TOTAL trains are listed, or would be if the group were unfolded.
+In the compact layout a long heading is wrapped."
   (concat
-   (propertize (if (eq state 'folded) "▸ " "▾ ") 'face 'train-time-group)
-   (train-time--station-bullets station)
-   "  "
-   (propertize
-    (concat (unless (equal (train-time-station-name station)
-                           (train-time-station-name train-time--station))
-              (concat (train-time-station-name station) " · "))
-            (or label "Terminating here"))
-    'face 'train-time-group)
-   "  "
-   (propertize (cond ((zerop total) "no trains")
-                     ((< shown total) (format "%d of %d" shown total))
-                     (t (format "%d train%s" total (if (= total 1) "" "s"))))
-               'face 'train-time-group-count)
+   (funcall
+    (if train-time--compact
+        (lambda (text) (train-time--hang text (max 20 (1- (or train-time--width 80))) 4))
+      #'identity)
+    (concat
+     " "
+     (propertize (if (eq state 'folded) "▸ " "▾ ") 'face 'train-time-group)
+     (train-time--station-bullets station)
+     "  "
+     (propertize
+      (concat (unless (equal (train-time-station-name station)
+                             (train-time-station-name train-time--station))
+                (concat (train-time-station-name station) " · "))
+              (or label "Terminating here"))
+      'face 'train-time-group)
+     "  "
+     (propertize (cond ((zerop total) "no trains")
+                       ((< shown total)
+                        (format (if train-time--compact "%d/%d" "%d of %d") shown total))
+                       (t (format "%d train%s" total (if (= total 1) "" "s"))))
+                 'face 'train-time-group-count)))
    "\n"))
 
 (defun train-time--shown-groups (rows)
@@ -652,7 +695,7 @@ Set `tabulated-list-entries' to the entries printed."
                            (seq-take trains limit))
                           (t trains)))
              (start (point)))
-        (insert " " (train-time--group-heading
+        (insert (train-time--group-heading
                      station label state
                      (if (eq state 'folded) (length trains) (length shown))
                      (length trains)))
@@ -876,16 +919,18 @@ With positive ARG enable it, with zero or negative ARG disable it."
                                     (string-join (reverse (cdr d)) ", "))
                             (car d)))
                     (nreverse labels))))
-         (choice (completing-read "Direction: " (cons "All" (mapcar #'car choices))
-                                  nil t)))
-    (train-time--set-filter :direction (cdr (assoc choice choices)))))
+         (choice (let ((completion-ignore-case t))
+                   (completing-read "Direction: " (cons "All" (mapcar #'car choices))
+                                    nil t))))
+    (train-time--set-filter :direction (cdr (assoc-string choice choices t)))))
 
 (defun train-time-filter-service ()
   "Show only local or only express trains."
   (interactive)
-  (let ((choice (completing-read "Service: " '("All" "Local" "Express") nil t)))
-    (train-time--set-filter :service (pcase choice
-                                       ("Local" 'local) ("Express" 'express)))))
+  (let ((choice (let ((completion-ignore-case t))
+                  (completing-read "Service: " '("All" "Local" "Express") nil t))))
+    (train-time--set-filter :service (pcase (downcase choice)
+                                       ("local" 'local) ("express" 'express)))))
 
 (defun train-time-filter-line ()
   "Show only trains on one line."
@@ -893,8 +938,11 @@ With positive ARG enable it, with zero or negative ARG disable it."
   (let* ((routes (or (delete-dups (mapcar #'train-time-arrival-route
                                           train-time--arrivals))
                      (train-time-mta-route-names train-time--stations)))
-         (choice (completing-read "Line: " (cons "All" routes) nil t)))
-    (train-time--set-filter :route (unless (equal choice "All") choice))))
+         (choice (let ((completion-ignore-case t))
+                   (completing-read "Line: " (cons "All" routes) nil t))))
+    (train-time--set-filter :route (unless (equal (downcase choice) "all")
+                                     (or (car (member-ignore-case choice routes))
+                                         choice)))))
 
 (defun train-time-toggle-terminating ()
   "Toggle display of trains that terminate at this station."
@@ -938,7 +986,8 @@ Clicking a destination does the same."
          (toward (train-time--direction-label arrival))
          (minutes (train-time-minutes-until (train-time-arrival-time arrival)
                                             (funcall train-time-now-function))))
-    (message "%s%s to %s%s\n%s %s (%s), %s\nTrip %s, platform %s, train %s"
+    (train-time--echo
+     (format "%s%s to %s%s\n%s %s (%s), %s%s"
              (string-trim (train-time--route-label arrival))
              (if (string-empty-p service) "" (concat " " service))
              (if (train-time-arrival-terminating arrival)
@@ -946,16 +995,22 @@ Clicking a destination does the same."
                (or (train-time-arrival-destination arrival) "?"))
              (if (string-empty-p toward) "" (format ", toward %s" toward))
              (if (eq (train-time-arrival-event arrival) 'departure) "Departs" "Arrives")
-             (format-time-string "%Y-%m-%d %H:%M:%S %Z"
+             ;; A phone's echo area has room for a few short lines only.
+             (format-time-string (if (train-time--narrow-frame-p)
+                                     "%H:%M"
+                                   "%Y-%m-%d %H:%M:%S %Z")
                                  (train-time-arrival-time arrival)
                                  train-time-mta-time-zone)
              (train-time--minutes-label minutes)
-             (if (train-time-arrival-assigned arrival)
-                 "tracked train"
-               "scheduled, no train assigned yet")
-             (train-time-arrival-trip-id arrival)
-             (train-time-arrival-stop-id arrival)
-             (or (train-time-arrival-train-id arrival) "unknown"))))
+             (cond ((train-time-arrival-assigned arrival) "tracked train")
+                   ((train-time--narrow-frame-p) "scheduled")
+                   (t "scheduled, no train assigned yet"))
+             (if (train-time--narrow-frame-p)
+                 ""
+               (format "\nTrip %s, platform %s, train %s"
+                       (train-time-arrival-trip-id arrival)
+                       (train-time-arrival-stop-id arrival)
+                       (or (train-time-arrival-train-id arrival) "unknown")))))))
 
 (defun train-time-mouse-select (event)
   "Act on the board line clicked in EVENT.
@@ -1169,12 +1224,14 @@ DEFAULT-ID is the stop ID offered by default, falling back to
          (prompt (or prompt "Station"))
          (default (train-time-mta-station (or default-id train-time-default-station)))
          (default-name (and default (train-time--station-candidate default)))
+         ;; Capitals are a chore on a phone keyboard.
+         (completion-ignore-case t)
          (name (completing-read
                 (if default
                     (format "%s (default %s): " prompt default-name)
                   (format "%s: " prompt))
                 table nil t nil nil default-name)))
-    (cdr (assoc name table))))
+    (cdr (assoc-string name table t))))
 
 (defun train-time--board-stations (station)
   "Return the stations a board for STATION lists, STATION first.

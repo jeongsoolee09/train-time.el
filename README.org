@@ -387,6 +387,11 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   compact layout: boards show Line, Destination, Time and In, grouped
   by direction; trip lists drop Travel and Status; text is filled to
   the window.  Buffers redraw when their window is resized.
+- *Phone-width windows* (under 44 columns, e.g. a portrait phone) also
+  drop the clock columns — boards show Line, Destination and In, trip
+  lists In, Trains, Change at and Arrive; tap a row for exact times.
+  Long headings and legends wrap, long station names end in "…", and
+  messages are shortened to fit the echo area.
 - *A touch bar* of buttons at the top of each buffer offers the main
   commands (Refresh, Station, Line, Direction, Alerts, Map, OSM, Quit
   and so on).  It is shown in text terminals and on Android; set
@@ -408,7 +413,8 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   | "(g to retry)" etc.   | Do it                                         |
 
 - Commands that ask for a station or line complete in the minibuffer:
-  press =TAB= and tap a candidate in =*Completions*=.
+  press =TAB= and tap a candidate in =*Completions*=.  Completion
+  ignores case, so =times= finds "Times Sq-42 St".
 - From a navigator under 80 columns wide, the board opens below it
   rather than to its right.
 - =m= opens OpenStreetMap in the browser or a map app (see above).

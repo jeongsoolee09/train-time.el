@@ -236,8 +236,9 @@ other journey beats are returned, sorted by departure."
          (dim (lambda (s) (if assigned s (propertize s 'face 'train-time-scheduled)))))
     (list legs
           (vconcat
-           (list (funcall dim (train-time-commute--clock departure))
-                 (funcall dim (train-time--minutes-label
+           (and (or (not train-time--compact) (train-time--clock-column-p))
+                (list (funcall dim (train-time-commute--clock departure))))
+           (list (funcall dim (train-time--minutes-label
                                (train-time-minutes-until departure now)))
                  (mapconcat #'train-time-commute--route legs "→")
                  (train-time-commute--via legs)
@@ -258,14 +259,20 @@ other journey beats are returned, sorted by departure."
 
 (defun train-time-commute--set-format (width)
   "Set the trip list's columns for a window WIDTH columns wide."
-  (let ((format (if train-time--compact
-                    ;; Padding, Leave, In, Trains and Arrive take 31 columns.
-                    (vector '("Leave" 5 nil)
-                            '("In" 6 nil :right-align t)
-                            '("Trains" 9 nil)
-                            (list "Change at" (max 8 (- width 32)) nil)
-                            '("Arrive" 6 nil))
-                  train-time-commute--wide-format)))
+  (let ((format (cond
+                 ((not train-time--compact) train-time-commute--wide-format)
+                 ((train-time--clock-column-p)
+                  ;; Padding, Leave, In, Trains and Arrive take 31 columns.
+                  (vector '("Leave" 5 nil)
+                          '("In" 6 nil :right-align t)
+                          '("Trains" 9 nil)
+                          (list "Change at" (max 8 (- width 32)) nil)
+                          '("Arrive" 6 nil)))
+                 ;; On a phone: padding, In, Trains and Arrive take 23.
+                 (t (vector '("In" 6 nil :right-align t)
+                            '("Trains" 7 nil)
+                            (list "Change at" (max 8 (- width 24)) nil)
+                            '("Arrive" 6 nil))))))
     (unless (equal format tabulated-list-format)
       (setq tabulated-list-format format)
       (tabulated-list-init-header))))
@@ -482,6 +489,18 @@ With positive ARG enable it, with zero or negative ARG disable it."
     (message "Auto refresh %s" (if enable "enabled" "disabled"))))
 
 (defun train-time-commute--describe-leg (leg)
+  "Describe LEG in one line, or briefly in a narrow frame."
+  (if (train-time--narrow-frame-p)
+      (format "%s %s %s → %s %s%s"
+              (string-trim (train-time-commute--route leg))
+              (train-time-commute--clock (train-time-leg-departure leg))
+              (train-time-station-name (train-time-leg-from leg))
+              (train-time-commute--clock (train-time-leg-arrival leg))
+              (train-time-station-name (train-time-leg-to leg))
+              (if (train-time-leg-assigned leg) "" " (scheduled)"))
+    (train-time-commute--describe-leg-in-full leg)))
+
+(defun train-time-commute--describe-leg-in-full (leg)
   "Describe LEG in one line."
   (let ((direction (alist-get (train-time-mta--direction (train-time-leg-stop-id leg))
                               (train-time-station-directions (train-time-leg-from leg)))))
@@ -499,7 +518,7 @@ With positive ARG enable it, with zero or negative ARG disable it."
   "Describe each train of the trip at point."
   (interactive)
   (let ((legs (or (tabulated-list-get-id) (user-error "No trip on this line"))))
-    (message "%s" (mapconcat #'train-time-commute--describe-leg legs "\n"))))
+    (train-time--echo (mapconcat #'train-time-commute--describe-leg legs "\n"))))
 
 (defun train-time-commute-mouse-select (event)
   "Describe the trip clicked in EVENT, which suits touch screens."

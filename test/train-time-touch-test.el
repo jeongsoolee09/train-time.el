@@ -122,7 +122,10 @@
       (train-time--width-changed (selected-window))
       (should train-time--compact)
       (should (= train-time--width (window-body-width)))
-      (should (= (length tabulated-list-format) 4))
+      ;; Under 44 columns, as on a phone, the Time column goes.
+      (should (< (window-body-width) 44))
+      (should (equal (mapcar #'car tabulated-list-format) '("Line" "Destination" "In")))
+      (should (cl-every (lambda (e) (= (length (cadr e)) 3)) tabulated-list-entries))
       (delete-other-windows)
       (train-time--width-changed (selected-window))
       (should-not train-time--compact))))
@@ -137,8 +140,9 @@
              (messages (train-time-touch-test--capture
                          (train-time-touch-test--tap (+ row 2)))))
         (should (string-match-p "34 St-Hudson Yards" (car messages)))
-        (should (string-match-p "Departs\\|Arrives" (car messages)))
-        (should (string-match-p "Trip " (car messages))))
+        (should (string-match-p "Departs [0-9][0-9]:[0-9][0-9] (" (car messages)))
+        ;; A narrow frame's echo area gets the short version.
+        (should-not (string-match-p "Trip " (car messages))))
       ;; Tapping a heading folds its group; tapping again unfolds it.
       (let ((state (lambda ()
                      (cdr (assoc (get-text-property (point) 'train-time-group)
@@ -148,6 +152,60 @@
           (train-time-touch-test--tap (train-time-touch-test--find "Manhattan"))
           (push (funcall state) seen))
         (should (equal seen '(nil folded)))))))
+
+(ert-deftest train-time-touch-test-describe-wide ()
+  (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+      train-time-test--fixture-time
+    (goto-char (point-min))
+    (while (not (tabulated-list-get-id)) (forward-line 1))
+    (let ((messages (train-time-touch-test--capture (train-time-describe-trip))))
+      (should (string-match-p "Departs 20[0-9-]+ [0-9:]+ E[SD]T" (car messages)))
+      (should (string-match-p "^Trip .*, platform 701S, train " (car messages))))))
+
+(ert-deftest train-time-touch-test-echo ()
+  (let ((train-time-compact-width 200))
+    (let ((messages (train-time-touch-test--capture
+                      (train-time--echo (concat (make-string 30 ?a) " "
+                                                (make-string 60 ?b))))))
+      (should (string-match-p "\\`a+\nb+\\'" (car messages)))))
+  (let ((train-time-compact-width 0))
+    (should (equal (train-time-touch-test--capture (train-time--echo "a b"))
+                   '("a b")))))
+
+(ert-deftest train-time-touch-test-phone-board ()
+  "At 36 columns destinations are shown in full."
+  (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+      train-time-test--fixture-time
+    (delete-other-windows)
+    (set-window-buffer (split-window-right 37) (get-buffer-create "*scratch*"))
+    (train-time--width-changed (selected-window))
+    (should (< (window-body-width) 40))
+    (should (string-match-p " 7 +34 St-Hudson Yards +[0-9]+ min$" (train-time-test--text)))))
+
+(ert-deftest train-time-touch-test-phone-heading ()
+  "A long group heading wraps on a phone and keeps its count together."
+  (with-temp-buffer
+    (setq-local train-time--compact t)
+    (setq-local train-time--width 36)
+    (setq-local train-time--station (train-time-mta-station "725"))
+    (let* ((heading (train-time--group-heading
+                     (train-time-mta-station "A27") "Downtown & Brooklyn" nil 3 42))
+           (lines (split-string heading "\n" t)))
+      (should (> (length lines) 1))
+      (dolist (line lines)
+        (should (<= (string-width line) 35)))
+      (should (string-match-p "^    " (cadr lines)))
+      (should (string-match-p "3/42$" (car (last lines)))))))
+
+(ert-deftest train-time-touch-test-case-insensitive-station ()
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (_prompt table &rest _)
+               (should completion-ignore-case)
+               (car (all-completions "times sq-42 st (7" table)))))
+    (should (equal (train-time-station-id (train-time--read-station)) "725")))
+  (cl-letf (((symbol-function 'completing-read)
+             (lambda (&rest _) "times sq-42 st (7)")))
+    (should (equal (train-time-station-id (train-time--read-station)) "725"))))
 
 (ert-deftest train-time-touch-test-board-bar ()
   (let ((train-time-touch-bar t)

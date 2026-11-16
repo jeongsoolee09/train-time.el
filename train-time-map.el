@@ -279,11 +279,17 @@ GAP is (COL . COL+1)."
                        'help-echo (plist-get (aref (train-time-map--columns) cell)
                                              :label))))
         (t (train-time-map--glyph (train-time-map--pass row cell) cell)))))
-    (insert "  "
-            (propertize (train-time-station-name (aref (train-time-map--stations) row))
-                        'face (and selected-row 'train-time-map-selected-station)
-                        'train-time-map-node (cons row nil))
-            "\n")))
+    (insert "  ")
+    (let ((name (train-time-station-name (aref (train-time-map--stations) row)))
+          ;; Lines are truncated; the terminal's last column shows `$'.
+          (room (- (or train-time--width 80) (current-column) 1)))
+      (insert (propertize (if (> (string-width name) room)
+                              (truncate-string-to-width name (max 4 room) nil nil "…")
+                            name)
+                          'face (and selected-row 'train-time-map-selected-station)
+                          'train-time-map-node (cons row nil)
+                          'help-echo name)
+              "\n"))))
 
 (defun train-time-map--link-row (row)
   "Insert the connector row between station ROW and the next one."
@@ -331,12 +337,15 @@ GAP is (COL . COL+1)."
       (let ((label (plist-get (aref columns col) :label))
             (text (train-time-map--describe-column col)))
         (insert (propertize
-                 (concat "  "
-                         (propertize label 'face (train-time-map--column-face col))
-                         (make-string (- (1+ width) (length label)) ?\s)
-                         (if (= col train-time-map--col)
-                             (propertize text 'face 'bold)
-                           text))
+                 (train-time--hang
+                  (concat "  "
+                          (propertize label 'face (train-time-map--column-face col))
+                          (make-string (- (1+ width) (length label)) ?\s)
+                          (if (= col train-time-map--col)
+                              (propertize text 'face 'bold)
+                            text))
+                  (max 20 (1- (or train-time--width 80)))
+                  (+ 3 width))
                  'train-time-map-column col
                  'mouse-face 'highlight
                  'help-echo (format "mouse-1: switch to %s" label))
@@ -574,8 +583,14 @@ shows another line, which suits touch screens."
       (cond
        (node
         (train-time-map--sync-to-point)
-        (when (equal selected (cons train-time-map--row train-time-map--col))
-          (train-time-map-open-board)))
+        (if (equal selected (cons train-time-map--row train-time-map--col))
+            (train-time-map-open-board)
+          ;; The details below the diagram may be off screen.
+          (let ((station (train-time-map--selected-station)))
+            (train-time--echo
+             (format "%s  Transfers: %s  (tap again for trains)"
+                     (train-time-station-name station)
+                     (train-time-map--describe-transfers station))))))
        (column
         (train-time-map--switch (- column train-time-map--col)))
        ((get-text-property (point) 'train-time-map-title)
@@ -621,8 +636,9 @@ Lines stopping at the selected station are offered first."
           (ids (append here (cl-set-difference (train-time-mta-line-ids) here
                                                :test #'equal)))
           (table (mapcar (lambda (id) (cons (train-time-mta-line-title id) id)) ids)))
-     (list (cdr (assoc (completing-read "Line: " table nil t nil nil (caar table))
-                       table)))))
+     (list (cdr (assoc-string (let ((completion-ignore-case t))
+                                (completing-read "Line: " table nil t nil nil (caar table)))
+                              table t)))))
   (train-time-map--show-line line-id nil))
 
 (defun train-time-map-transfer ()
@@ -640,8 +656,9 @@ Lines stopping at the selected station are offered first."
                                 tr))
                         transfers))
          (choice (if (cdr table)
-                     (cdr (assoc (completing-read "Transfer to: " table nil t)
-                                 table))
+                     (cdr (assoc-string (let ((completion-ignore-case t))
+                                          (completing-read "Transfer to: " table nil t))
+                                        table t))
                    (cdar table))))
     (train-time-map--show-line (car choice) (cdr choice))))
 

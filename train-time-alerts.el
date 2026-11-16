@@ -623,10 +623,12 @@ With QUIET, do not complain when there is none."
   (let* ((table (mapcar (lambda (r) (cons (nth 1 r) (car r)))
                         (cl-remove-if (lambda (r) (string-suffix-p "X" (car r)))
                                       train-time-mta-data-routes)))
-         (names (completing-read-multiple "Lines (empty for all): " table nil t)))
+         (names (let ((completion-ignore-case t))
+                  (completing-read-multiple "Lines (empty for all): " table nil t))))
     (delete-dups (cl-loop for name in names
                           append (cl-loop for (n . id) in table
-                                          when (equal n name) collect id)))))
+                                          when (equal (downcase n) (downcase name))
+                                          collect id)))))
 
 ;;;###autoload
 (defun train-time-alerts (&optional routes alert-id)
