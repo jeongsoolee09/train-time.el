@@ -1,0 +1,296 @@
+#+TITLE: train-time.el
+#+SUBTITLE: All aboard, without leaving Emacs.
+
+Real-time train arrivals and departures in GNU Emacs, from official
+transit data.
+
+* Status
+
+Supported today: every New York City Subway line and the Staten Island
+Railway — all 496 stations in MTA's station list — using MTA's public
+GTFS-Realtime feeds.  No API key or account is needed.
+
+=M-x train-time-map= is a keyboard-driven text diagram of each line in
+the style of =undo-tree-visualize=.  Seoul, Tokyo, favorites,
+graphical maps and route planning are planned but not implemented
+yet; see [[*Roadmap][Roadmap]].
+
+* Requirements
+
+- GNU Emacs 27.1 or later, built with GnuTLS (standard on most builds).
+- Nothing else.  The GTFS-Realtime Protocol Buffers decoder is written
+  in Emacs Lisp; no Python, =protoc= or external process is needed.
+
+* Installation
+
+#+begin_src emacs-lisp
+(add-to-list 'load-path "/path/to/train-time")
+(require 'train-time)
+#+end_src
+
+* Usage
+
+=M-x train-time= asks for a station (default: Flushing-Main St) and
+opens a buffer of upcoming trains.  Candidates show the routes that
+stop there, e.g. "Coney Island-Stillwell Av (D F N Q)"; stations that
+share a name are told apart by their daytime routes, e.g. "Times
+Sq-42 St (7)" and "Times Sq-42 St (N Q R W)".
+
+#+begin_example
+ Line  Service  Toward             Destination          Event    Time        In Status     Train
+  D             Manhattan          Norwood-205 St       Arrives  15:34       now Tracked    1D 1535+ STL/205
+  Q             Manhattan          96 St                Arrives  15:35       now Scheduled  1Q 1535+ STL/962
+  F    Local    Manhattan          Jamaica-179 St       Arrives  15:36       now Scheduled  1F 1536 STL/179
+  N             Manhattan          Astoria-Ditmars Blvd Arrives  15:41     6 min Scheduled  1N 1541+ STL/DIT
+
+Feed time 15:35:13 EST (4s old)
+69 terminating trains hidden  (t to show)
+Data: Metropolitan Transportation Authority (MTA)
+#+end_example
+
+Route bullets use MTA's colors.  MTA publishes its real time data in
+eight feeds grouped by route (1-7 and S, ACE, BDFM, G, JZ, NQRW, L,
+SIR); a board fetches every feed serving the station in parallel and
+merges them.  The *Service* column says Local or Express only for
+routes that have both (the 6, 7 and F and their =<6>=, =<7>=, =<F>=
+variants); it is blank for the others.
+
+| Key   | Command                              |
+|-------+--------------------------------------|
+| =g=   | Refresh now                          |
+| =a=   | Toggle auto refresh                  |
+| =d=   | Filter by direction                  |
+| =s=   | Filter by service (local / express)  |
+| =l=   | Filter by line                       |
+| =c=   | Clear filters                        |
+| =t=   | Show/hide trains terminating here    |
+| =S=   | Switch to another station            |
+| =RET= | Show trip details in the echo area   |
+| =m=   | Show the station on OpenStreetMap    |
+| =q=   | Quit window                          |
+
+*Evil users:* when Evil is loaded the buffer starts in normal state,
+=j=/=k=/=gg=/=G= move as usual, =g r= refreshes, and the other keys
+above work unchanged in normal state.  Set =train-time-evil-bindings=
+to nil to opt out.
+
+** Network navigator
+
+=M-x train-time-map= draws a line as a text diagram, in the spirit of
+=undo-tree-visualize=.  Stations run down the buffer; each of the
+line's main stopping patterns — local, express, branches — is a
+column with a node =o= where its trains stop.  =x= marks the selected
+node.  Between stops, =|= runs past stations the pattern skips on the
+same tracks, and =:= runs alongside another branch it does not serve.
+A legend above the diagram describes each pattern and its share of
+the line's scheduled trips.
+
+#+begin_example
+  A  8 Avenue Express
+
+  A  Inwood-207 St → Ozone Park-Lefferts Blvd, 30 stops, 42% of trips
+  A2 Inwood-207 St → Far Rockaway-Mott Av, 37 stops, 39% of trips
+  A3 Inwood-207 St → Far Rockaway-Mott Av, 59 stops, 14% of trips
+
+  A   A2  A3
+  ...
+  o---o---o  Rockaway Blvd
+  |   :   :
+  o   :   :  104 St
+  |   :   :
+  o   :   :  111 St
+  |   :   :
+  o   :   :  Ozone Park-Lefferts Blvd
+      :   :
+      o---o  Aqueduct Racetrack
+      |   |
+      o---o  Aqueduct-N Conduit Av
+#+end_example
+
+Below the diagram are the selected station's services, directions and
+transfers: other lines stopping there or elsewhere in the same station
+complex, e.g. at Times Sq-42 St (7) "N Q R W 1 2 3 S, A C E (42
+St-Port Authority Bus Terminal)".
+
+| Key                  | Evil       | Command                                    |
+|----------------------+------------+--------------------------------------------|
+| =C-n= / =C-p=        | =j= / =k=  | Next / previous stop on the selected service |
+| =C-f= / =C-b=        | =l= / =h=  | Switch to the service right / left           |
+| =M-<= / =M->=        | =gg= / =G= | First / last stop                            |
+| =RET=                | =RET=      | Open the station's arrivals board            |
+| =L=                  | =L=        | Show another line                            |
+| =t=                  | =t=        | Transfer to another line at this station     |
+| =m=                  | =m=        | Show the station on OpenStreetMap            |
+| =q=                  | =q=        | Quit                                         |
+
+=n=, =p=, =f=, =b= and the arrow keys also move, as in undo-tree.
+Switching to a service that does not stop at the selected station
+moves to its nearest stop.  Called from an arrivals board, the map
+starts at that board's station, switching to the first line that stops
+there if the line shown does not.  =L= offers the lines stopping at the
+selected station first; =t= lists the transfers and moves to the
+chosen line at the connected station.
+
+=train-time-map-board-display= decides where =RET= shows the board:
+
+- =right= (default) :: split the map window, board on the right
+- =below= :: split the map window, board underneath
+- =replace= :: show the board in the map's window; =q= returns to the map
+
+With =right= and =below=, opening another station replaces the board
+the map opened last instead of splitting again.
+
+The columns come from MTA's published schedule (see [[*Line data][Line data]]), so
+they show what the timetable for the current service period plans,
+including long-term planned work, not the classic line map.  Rare and
+short-turn patterns are left out.  The arrivals board always shows
+what the real time feed says.
+
+** Reading the display
+
+- *Tracked* means a physical train is assigned to the trip and its
+  time is a live prediction.  *Scheduled* (dimmed) means no train is
+  assigned yet; the time comes from the schedule and may change.
+- *Departs* is shown where the feed only gives a departure time (for
+  example at a terminal); otherwise *Arrives*.
+- Trains that end their trip at the station cannot be boarded and are
+  hidden by default (=t= toggles them).
+- *Feed time* is the timestamp MTA put on the data.  When it is older
+  than =train-time-stale-threshold= the buffer says *STALE*.
+- If a refresh fails, the previous predictions stay visible and the
+  error is shown below them.  When a station is served by several
+  feeds and only one fails, the others keep updating and the error
+  names the failing feed.  The feed time shown is the oldest one.
+- Times are always shown in New York time, whatever your Emacs time
+  zone is.
+
+** OpenStreetMap (osm.el)
+
+With [[https://github.com/minad/osm][osm.el]] installed (GNU ELPA; it
+needs Emacs 29+, a graphical frame and =curl=), =m= in a board or the
+network navigator — or =M-x train-time-osm= — shows the line on
+OpenStreetMap, centered on the station:
+
+- The line is the one shown in the navigator, or from a board the
+  first line stopping at the station.
+- Its stations are osm.el pins, and each stopping pattern is a track
+  segment through its stops, in a data set named after the line, e.g.
+  "A 8 Avenue Express" (=M-x osm-hide= removes it).
+- The track joins stations with straight segments, so it shows where
+  the line runs, not its exact alignment.
+- The map opens next to the train-time windows.  With both the
+  navigator and a board visible it takes the bottom-right corner (below
+  the board when they are side by side, right of it when they are
+  stacked); with only one visible it opens to its right.  An existing
+  osm.el window is reused.
+
+Only osm.el's public commands (=osm-open= with a generated GPX file,
+=osm-goto=) are used.  osm.el is optional; without it =m= just says so.
+
+** Customization
+
+=M-x customize-group RET train-time= — notable options:
+
+- =train-time-default-station= (="701"=, Flushing-Main St; any GTFS stop
+  ID from =train-time-mta-data.el=)
+- =train-time-auto-refresh=, =train-time-auto-refresh-interval= (30 s)
+- =train-time-stale-threshold= (120 s)
+- =train-time-show-terminating=, =train-time-max-rows=
+- =train-time-request-timeout=, =train-time-mta-feed-base-url=
+- =train-time-map-board-display= (=right=, =below= or =replace=)
+- =train-time-osm-zoom= (16)
+- =train-time-evil-bindings=
+
+* Design
+
+| File                    | Role                                                     |
+|-------------------------+----------------------------------------------------------|
+| =train-time-pb.el=      | Schema-driven Protocol Buffers wire-format decoder        |
+| =train-time-gtfs-rt.el= | GTFS-Realtime schema (+ NYCT extensions) and helpers      |
+| =train-time-core.el=    | Backend-independent records (station, arrival), time fns |
+| =train-time-mta-data.el= | Generated: MTA stations, routes, colors, line patterns  |
+| =train-time-mta.el=     | MTA feeds per route, stations, lines, feed → arrivals     |
+| =train-time.el=         | Commands, =tabulated-list-mode= UI, async HTTP, refresh   |
+| =train-time-map.el=     | =M-x train-time-map= text network navigator               |
+| =train-time-osm.el=     | Optional osm.el view: GPX export + =osm-open=/=osm-goto=  |
+
+Principles kept so far:
+
+- Data acquisition and normalization (=train-time-mta.el=) are separate
+  from presentation (=train-time.el=); backends produce
+  =train-time-arrival= records.
+- Times are POSIX seconds internally and are converted to the system's
+  local zone only for display.
+- Missing predictions are dropped, never invented.  Skipped stops and
+  zero (proto2 default) times are ignored.  The NYCT feed also carries
+  "ghost" trips that passed hours ago; calls older than 30 s are
+  filtered out.
+- Network access goes through =train-time-fetch-function=, which tests
+  replace.
+
+A station is a GTFS parent stop such as ="701"=; its platforms add =N=
+or =S=.  Stations sharing a Complex ID in Stations.csv are connected
+by transfers, but each keeps its own board.
+
+** Line data
+
+=train-time-mta-data.el= is generated, not written by hand, from MTA's
+[[https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip][static GTFS]] and
+[[https://web.mta.info/developers/data/nyct/subway/Stations.csv][Stations.csv]]
+by =scripts/train-time-mta-generate.el=, which is plain Emacs Lisp:
+
+#+begin_src sh
+make data      # download the current data and regenerate
+#+end_src
+
+For each line (a route plus its express variant, so 7 and 7X form one
+line) it turns every scheduled trip into its sequence of stations,
+weights it by the days a week it runs, drops short turns, merges
+patterns that differ by one or two stops, and keeps each route's most
+frequent pattern plus others with at least 5% of trips (four at most).
+The file records the GTFS feed version it was built from, shown at
+the bottom of the navigator.  Regenerate it when MTA publishes a new
+schedule; the output is deterministic.
+
+* Development
+
+#+begin_src sh
+make compile   # byte-compile with warnings treated as errors
+make test      # ERT suite; no network access
+#+end_src
+
+Tests use recorded, unmodified MTA responses in =test/fixtures/= (the
+1-7 feed, and the BDFM and NQRW feeds for Coney Island, a station
+served by two feeds) and an injected clock, so they are deterministic.
+The generator is tested against a tiny made-up GTFS feed.
+
+* Roadmap
+
+1. *Milestone 3* — backend interface, favorites, caching; boards for a
+   whole station complex.
+2. *Milestone 4* — Seoul (Open Data Plaza) and Tokyo (ODPT), with keys
+   read through =auth-source=.
+3. *Milestone 5* — graphical schematic maps (SVG first; Canvas to be
+   evaluated), GTFS =shapes.txt= geometry for the osm.el view, more
+   lines and interchanges in =train-time-map=.
+4. *Later* — =M-x train-route= and time-aware routing.
+
+* Data and attribution
+
+Data provided by the Metropolitan Transportation Authority (MTA),
+subject to the MTA data feed terms at https://api.mta.info/.  This
+package is not affiliated with or endorsed by the MTA.  Predictions
+can be wrong; check official sources when it matters.
+
+Map tiles in the osm.el view come from the tile servers configured in
+osm.el, under their own terms (OpenStreetMap data © OpenStreetMap
+contributors, ODbL).
+
+Station names, coordinates and complexes in =train-time-mta-data.el=
+come from MTA's
+[[https://web.mta.info/developers/data/nyct/subway/Stations.csv][Stations.csv]];
+routes, colors and stopping patterns from MTA's static GTFS schedule.
+
+* License
+
+GPL-3.0-or-later.  See =LICENSE=.
