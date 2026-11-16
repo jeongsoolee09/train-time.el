@@ -32,10 +32,17 @@
 ;; The track joins station coordinates with straight segments; it
 ;; shows where the line runs, not the exact alignment.  GTFS
 ;; shapes.txt geometry is a later improvement.
+;;
+;; osm.el draws images, which a text terminal cannot show.  There,
+;; `train-time-osm' opens the station on the OpenStreetMap website or
+;; as a geo: URI in a map app instead (see `train-time-osm-terminal'),
+;; through termux-open-url on Termux and `browse-url' elsewhere.
 
 ;;; Code:
 
+(require 'browse-url)
 (require 'cl-lib)
+(require 'url-util)
 (require 'xml)
 (require 'train-time)
 (require 'train-time-map)
@@ -47,6 +54,14 @@
 (defcustom train-time-osm-zoom 16
   "Zoom level used when showing a station in osm.el."
   :type 'natnum
+  :group 'train-time)
+
+(defcustom train-time-osm-terminal 'web
+  "What `train-time-osm' opens in a text terminal, where osm.el can't draw.
+`web' opens the OpenStreetMap website at the station; `geo' opens
+a geo: URI, which Android hands to a map app of your choice."
+  :type '(choice (const :tag "OpenStreetMap website" web)
+                 (const :tag "geo: URI for a map app" geo))
   :group 'train-time)
 
 ;;;; GPX
@@ -178,14 +193,47 @@ stopping at STATION."
     (or (cl-find-if #'get-buffer-window osm-buffers)
         (car osm-buffers))))
 
+;;;; Terminals
+
+(defun train-time-osm-url (station &optional kind)
+  "Return a URL showing STATION on a map.
+KIND is `web' for the OpenStreetMap website, the default, or `geo'
+for a geo: URI."
+  (let ((lat (train-time-station-lat station))
+        (lon (train-time-station-lon station)))
+    (if (eq kind 'geo)
+        (format "geo:%.6f,%.6f?q=%.6f,%.6f(%s)" lat lon lat lon
+                (url-hexify-string (train-time-station-name station)))
+      (format "https://www.openstreetmap.org/?mlat=%.6f&mlon=%.6f#map=%d/%.6f/%.6f"
+              lat lon train-time-osm-zoom lat lon))))
+
+(defun train-time-osm--browse (url)
+  "Open URL outside Emacs.
+On Termux, use termux-open-url unless `browse-url-browser-function'
+has been customized, since `browse-url' there falls back to EWW."
+  (let ((termux (executable-find "termux-open-url")))
+    (if (and termux (eq browse-url-browser-function #'browse-url-default-browser))
+        (call-process termux nil 0 nil url)
+      (browse-url url))))
+
 ;;;###autoload
 (defun train-time-osm (station)
   "Show STATION and its line on OpenStreetMap using osm.el.
 Interactively, use the station of the current arrivals board or
 network map, or read one with completion.  The map opens next to
-the train-time windows; see `train-time-osm--placement'."
+the train-time windows; see `train-time-osm--placement'.  In a text
+terminal, open the station in a browser or map app instead; see
+`train-time-osm-terminal'."
   (interactive (list (or (train-time-osm--station-at-point)
                          (train-time--read-station))))
+  (if (not (display-graphic-p))
+      (let ((url (train-time-osm-url station train-time-osm-terminal)))
+        (train-time-osm--browse url)
+        (message "Opening %s on a map: %s" (train-time-station-name station) url))
+    (train-time-osm--show station)))
+
+(defun train-time-osm--show (station)
+  "Show STATION and its line in osm.el."
   (unless (or (featurep 'osm) (require 'osm nil t))
     (user-error "Showing stations on a map needs osm.el (M-x package-install RET osm)"))
   (let* ((line (train-time-osm--line-for station))

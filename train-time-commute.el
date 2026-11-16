@@ -235,15 +235,40 @@ other journey beats are returned, sorted by departure."
          (assigned (cl-every #'train-time-leg-assigned legs))
          (dim (lambda (s) (if assigned s (propertize s 'face 'train-time-scheduled)))))
     (list legs
-          (vector
-           (funcall dim (train-time-commute--clock departure))
-           (funcall dim (train-time--minutes-label
-                         (train-time-minutes-until departure now)))
-           (mapconcat #'train-time-commute--route legs "→")
-           (train-time-commute--via legs)
-           (funcall dim (train-time-commute--clock arrival))
-           (funcall dim (format "%d min" (round (- arrival departure) 60)))
-           (funcall dim (if assigned "Tracked" "Scheduled"))))))
+          (vconcat
+           (list (funcall dim (train-time-commute--clock departure))
+                 (funcall dim (train-time--minutes-label
+                               (train-time-minutes-until departure now)))
+                 (mapconcat #'train-time-commute--route legs "→")
+                 (train-time-commute--via legs)
+                 (funcall dim (train-time-commute--clock arrival)))
+           (unless train-time--compact
+             (list (funcall dim (format "%d min" (round (- arrival departure) 60)))
+                   (funcall dim (if assigned "Tracked" "Scheduled"))))))))
+
+(defconst train-time-commute--wide-format
+  [("Leave" 6 nil)
+   ("In" 8 nil :right-align t)
+   ("Trains" 10 nil)
+   ("Change at" 26 nil)
+   ("Arrive" 7 nil)
+   ("Travel" 7 nil :right-align t)
+   ("Status" 0 nil)]
+  "Trip list columns in the usual layout.")
+
+(defun train-time-commute--set-format (width)
+  "Set the trip list's columns for a window WIDTH columns wide."
+  (let ((format (if train-time--compact
+                    ;; Padding, Leave, In, Trains and Arrive take 31 columns.
+                    (vector '("Leave" 5 nil)
+                            '("In" 6 nil :right-align t)
+                            '("Trains" 9 nil)
+                            (list "Change at" (max 8 (- width 32)) nil)
+                            '("Arrive" 6 nil))
+                  train-time-commute--wide-format)))
+    (unless (equal format tabulated-list-format)
+      (setq tabulated-list-format format)
+      (tabulated-list-init-header))))
 
 (defun train-time-commute--feed-time ()
   "Return the timestamp of the oldest feed, or nil."
@@ -300,8 +325,9 @@ other journey beats are returned, sorted by departure."
            text)))
       ((zerop train-time-commute--pending) "No data yet"))
      (when errors
-       (concat "\n" (propertize (format "Last update failed: %s (g to retry)" errors)
-                                'face 'train-time-error)))
+       (concat "\n" (propertize (format "Last update failed: %s " errors)
+                                'face 'train-time-error)
+               (train-time--button "(g to retry)" #'train-time-commute-refresh)))
      (let ((alerts (and train-time-show-alerts (featurep 'train-time-alerts)
                         (train-time-alerts-summary
                          (train-time-commute-routes)
@@ -319,7 +345,11 @@ times are predictions, not a promise of the fastest trip."
 (defun train-time-commute--render (&optional now)
   "Redisplay the current trips buffer as of NOW."
   (let* ((now (or now (funcall train-time-now-function)))
-         (rows (seq-take train-time-commute--journeys train-time-commute-max-rows)))
+         (rows (seq-take train-time-commute--journeys train-time-commute-max-rows))
+         (width (train-time--window-width)))
+    (setq train-time--width width
+          train-time--compact (train-time--compact-p width))
+    (train-time-commute--set-format width)
     (setq tabulated-list-entries
           (mapcar (lambda (legs) (train-time-commute--entry legs now)) rows))
     (tabulated-list-print t)
@@ -329,7 +359,18 @@ times are predictions, not a promise of the fastest trip."
         (when (and (null rows) (zerop train-time-commute--pending)
                    train-time-commute--feed-results)
           (insert "  No trips found with at most one change in the real-time feeds.\n"))
-        (insert "\n" (train-time-commute--status now) "\n")))
+        (insert "\n" (train-time--fill (train-time-commute--status now) (max 20 (1- width)))
+                "\n")
+        (goto-char (point-min))
+        (insert (train-time--touch-bar
+                 `(("Refresh" train-time-commute-refresh)
+                   (,(if train-time-commute--timer "Auto: on" "Auto: off")
+                    train-time-commute-toggle-auto-refresh)
+                   ("Reverse" train-time-commute-reverse)
+                   ("Board" train-time-commute-board)
+                   ("Alerts" train-time-alerts)
+                   ("Quit" quit-window))))))
+    (when (bobp) (train-time--skip-touch-bar))
     (setq mode-line-process
           (concat (cond ((> train-time-commute--pending 0) " updating")
                         ((train-time-commute--errors) " error"))
@@ -460,6 +501,13 @@ With positive ARG enable it, with zero or negative ARG disable it."
   (let ((legs (or (tabulated-list-get-id) (user-error "No trip on this line"))))
     (message "%s" (mapconcat #'train-time-commute--describe-leg legs "\n"))))
 
+(defun train-time-commute-mouse-select (event)
+  "Describe the trip clicked in EVENT, which suits touch screens."
+  (interactive "e")
+  (mouse-set-point event)
+  (when (tabulated-list-get-id)
+    (train-time-commute-describe)))
+
 (defun train-time-commute-board ()
   "Open the board of the first station of the trip at point.
 With no trip at point, open the board of the origin."
@@ -493,6 +541,7 @@ With no trip at point, open the board of the origin."
     (define-key map "b" #'train-time-commute-board)
     (define-key map "A" #'train-time-alerts)
     (define-key map (kbd "RET") #'train-time-commute-describe)
+    (define-key map [mouse-1] #'train-time-commute-mouse-select)
     map)
   "Keymap for `train-time-commute-mode'.")
 
@@ -500,17 +549,11 @@ With no trip at point, open the board of the origin."
   "Major mode listing trips between home and work.
 
 \\{train-time-commute-mode-map}"
-  (setq tabulated-list-format
-        [("Leave" 6 nil)
-         ("In" 8 nil :right-align t)
-         ("Trains" 10 nil)
-         ("Change at" 26 nil)
-         ("Arrive" 7 nil)
-         ("Travel" 7 nil :right-align t)
-         ("Status" 0 nil)])
+  (setq tabulated-list-format train-time-commute--wide-format)
   (setq tabulated-list-padding 1
         tabulated-list-sort-key nil)
   (setq-local revert-buffer-function #'train-time-commute-refresh)
+  (train-time--watch-width #'train-time-commute--render)
   (add-hook 'kill-buffer-hook #'train-time-commute--stop-timer nil t)
   (tabulated-list-init-header)
   (train-time-evil-setup 'train-time-commute-mode train-time-commute-mode-map

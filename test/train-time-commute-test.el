@@ -152,7 +152,7 @@
       (should (string-match-p "^ 16:18 +5 min +7 +direct +16:51 +33 min Tracked" text))
       (should (string-match-p "From Flushing-Main St (home) to Grand Central-42 St" text))
       (should (string-match-p "Feed time 16:12:51" text))
-      (should (string-match-p "not a promise of the fastest trip" text)))))
+      (should (string-match-p "not[ \n]a promise of the fastest trip" text)))))
 
 (ert-deftest train-time-commute-test-buffer-change ()
   (train-time-commute-test--with "701" "R01" #'train-time-test--times-sq-fetch

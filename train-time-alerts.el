@@ -221,24 +221,23 @@ COMPLEXES are station complex IDs.  Elevators come first."
 (defun train-time-alerts--fill (text indent width)
   "Return TEXT filled to WIDTH, every line indented by INDENT spaces.
 Each line of TEXT is filled on its own."
-  (let ((prefix (make-string indent ?\s)))
-    (mapconcat
-     (lambda (line)
-       (if (string-blank-p line)
-           ""
-         (with-temp-buffer
-           (let ((fill-column width)
-                 (fill-prefix prefix))
-             (insert prefix (string-trim line))
-             (fill-region (point-min) (point-max))
-             (string-trim-right (buffer-string))))))
-     (split-string text "\n")
-     "\n")))
+  (train-time--fill text width indent))
 
 (defun train-time-alerts--width ()
   "Return the width to fill alert text in the current buffer."
-  (let ((window (get-buffer-window (current-buffer) t)))
-    (max 40 (- (if window (window-body-width window) 80) 2))))
+  (max 20 (- (train-time--window-width) 2)))
+
+(define-button-type 'train-time-alerts-link 'face nil)
+
+(defun train-time-alerts--link (text routes &optional alert)
+  "Return TEXT as a link to the alerts of ROUTES, focused on ALERT.
+TEXT keeps its own faces; the link only highlights under the mouse."
+  (train-time--button text
+                      (lambda ()
+                        (interactive)
+                        (train-time-alerts routes (and alert (train-time-alert-id alert))))
+                      :type 'train-time-alerts-link
+                      'help-echo "mouse-1, RET: show in the alerts buffer"))
 
 (defun train-time-alerts--routes-bullets (alert)
   "Return the bullets of ALERT's routes, express variants left out."
@@ -307,19 +306,23 @@ current time.  Return nil before anything has been downloaded."
             (propertize (format "Service alerts in effect (%d):" (length current))
                         'face 'train-time-alert)
             (mapconcat (lambda (alert)
-                         (concat "\n" (train-time-alerts--fill
-                                       (concat (train-time-alerts--routes-bullets alert)
-                                               " "
-                                               (train-time-alerts--kind alert)
-                                               ": "
-                                               (train-time-alerts--bulletize
-                                                (or (train-time-alert-header alert) "")))
-                                       2 width)))
+                         (concat "\n" (train-time-alerts--link
+                                       (train-time-alerts--fill
+                                        (concat (train-time-alerts--routes-bullets alert)
+                                                " "
+                                                (train-time-alerts--kind alert)
+                                                ": "
+                                                (train-time-alerts--bulletize
+                                                 (or (train-time-alert-header alert) "")))
+                                        2 width)
+                                       routes alert)))
                        current ""))
          "No service alerts in effect for these lines.")
        (when planned
-         (format "\n%d planned service change%s coming up."
-                 (length planned) (if (cdr planned) "s" "")))
+         (concat "\n" (train-time-alerts--link
+                       (format "%d planned service change%s coming up."
+                               (length planned) (if (cdr planned) "s" ""))
+                       routes)))
        (mapconcat (lambda (outage)
                     (concat "\n" (train-time-alerts--fill
                                   (propertize (train-time-alerts--outage-text outage)
@@ -332,8 +335,13 @@ current time.  Return nil before anything has been downloaded."
          (concat "\n" (propertize (format "Alerts unavailable: %s"
                                           (string-join errors "; "))
                                   'face 'train-time-error)))
-       (substitute-command-keys
-        "\n\\<train-time-mode-map>\\[train-time-alerts] lists the lines' alerts.")))))
+       "\n"
+       (train-time-alerts--link
+        (if (train-time--touch-bar-p)
+            "Tap here, or on an alert, for the lines' alerts."
+          (substitute-command-keys
+           "\\<train-time-mode-map>\\[train-time-alerts] lists the lines' alerts."))
+        routes)))))
 
 (defun train-time-alerts-count (routes stations now)
   "Return how many alerts for ROUTES and STATIONS are in effect at NOW.
@@ -349,6 +357,8 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
   "IDs of alerts whose details are shown.")
 (defvar-local train-time-alerts--loading nil
   "Non-nil while a download is running.")
+(defvar-local train-time-alerts--focus nil
+  "ID of the alert to move to once it is shown.")
 
 (defun train-time-alerts--insert-alert (alert now width)
   "Insert ALERT as of NOW, filled to WIDTH."
@@ -358,11 +368,14 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
         (when-text (train-time-alerts--when alert now)))
     (insert (if description (if open "▾ " "▸ ") "  ")
             (train-time-alerts--routes-bullets alert) " "
-            (train-time-alerts--kind alert)
-            (if when-text
-                (concat "  " (propertize when-text 'face 'train-time-alert-time))
-              "")
-            "\n"
+            (train-time-alerts--kind alert))
+    (when when-text
+      ;; In narrow windows the period goes on a line of its own.
+      (insert (if (> (+ (current-column) 2 (string-width when-text)) width)
+                  "\n    "
+                "  ")
+              (propertize when-text 'face 'train-time-alert-time)))
+    (insert "\n"
             (train-time-alerts--fill
              (train-time-alerts--bulletize (or (train-time-alert-header alert) ""))
              4 width)
@@ -388,6 +401,7 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
   (let* ((inhibit-read-only t)
          (now (funcall train-time-now-function))
          (width (train-time-alerts--width))
+         (window-width (train-time--window-width))
          (at (get-text-property (point) 'train-time-alert))
          (line (and at (count-lines (car (last (cl-remove-if-not
                                                  (lambda (s) (<= s (point)))
@@ -396,8 +410,14 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
          (selection (train-time-alerts-select train-time-alerts--routes now))
          (feed-time (plist-get (cdr (assq 'alerts train-time-alerts--cache)) :feed-time))
          (err (train-time-alerts--error 'alerts)))
+    (setq train-time--width window-width)
     (erase-buffer)
-    (insert "\n " (propertize (train-time-alerts--title) 'face 'train-time-alert-heading)
+    (insert (train-time--touch-bar
+             '(("Refresh" train-time-alerts-refresh)
+               ("Details" train-time-alerts-toggle-all)
+               ("Lines" train-time-alerts-choose-lines)
+               ("Quit" quit-window)))
+            "\n " (propertize (train-time-alerts--title) 'face 'train-time-alert-heading)
             "\n\n")
     (pcase-dolist (`(,title . ,alerts) `(("In effect now" . ,(car selection))
                                          ("Planned" . ,(cdr selection))))
@@ -421,27 +441,41 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
              (train-time-alerts--loading "Updating…")
              (t ""))
             (if err
-                (concat "\n" (propertize (format "Last update failed: %s (g to retry)" err)
-                                         'face 'train-time-error))
+                (concat "\n" (propertize (format "Last update failed: %s " err)
+                                         'face 'train-time-error)
+                        (train-time--button "(g to retry)" #'train-time-alerts-refresh))
               "")
             "\n"
-            (propertize
-             (if (bound-and-true-p evil-local-mode)
-                 "TAB details   S-TAB all details   gj/gk next/previous   gr refresh   q quit"
-               "TAB details   S-TAB all details   n/p next/previous   g refresh   q quit")
-             'face 'shadow)
-            "\n" train-time-mta-attribution "\n")
+            (train-time--fill
+             (propertize
+              (cond ((train-time--touch-bar-p)
+                     "Tap an alert to show or hide its details; swipe to scroll.")
+                    ((bound-and-true-p evil-local-mode)
+                     "TAB details   S-TAB all details   gj/gk next/previous   gr refresh   q quit")
+                    (t
+                     "TAB details   S-TAB all details   n/p next/previous   g refresh   q quit"))
+              'face 'shadow)
+             (max 20 (1- window-width)))
+            "\n" (train-time--fill train-time-mta-attribution (max 20 (1- window-width)))
+            "\n")
     (goto-char (point-min))
-    (let ((found (and at (cl-find-if
-                          (lambda (pos)
-                            (equal (train-time-alert-id
-                                    (get-text-property pos 'train-time-alert))
-                                   (train-time-alert-id at)))
-                          (train-time-alerts--starts)))))
-      (if found
-          (progn (goto-char found)
-                 (forward-line line))
-        (train-time-alerts-next 1 t)))))
+    (let* ((find (lambda (id)
+                   (and id (cl-find-if
+                            (lambda (pos)
+                              (equal (train-time-alert-id
+                                      (get-text-property pos 'train-time-alert))
+                                     id))
+                            (train-time-alerts--starts)))))
+           (focus (funcall find train-time-alerts--focus))
+           (found (and (not focus) at (funcall find (train-time-alert-id at)))))
+      (cond (focus (goto-char focus)
+                   (setq train-time-alerts--focus nil)
+                   (dolist (window (get-buffer-window-list nil nil t))
+                     (set-window-point window focus)
+                     (set-window-start window (line-beginning-position 0))))
+            (found (goto-char found)
+                   (forward-line line))
+            (t (train-time-alerts-next 1 t))))))
 
 (defun train-time-alerts--refresh (&optional force)
   "Download alerts (all of them with FORCE) and redisplay."
@@ -493,6 +527,19 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
             ids))
     (train-time-alerts--render)))
 
+(defun train-time-alerts-mouse-select (event)
+  "Show or hide the details of the alert clicked in EVENT.
+This suits touch screens, where a tap is a click."
+  (interactive "e")
+  (mouse-set-point event)
+  (when (get-text-property (point) 'train-time-alert)
+    (train-time-alerts-toggle)))
+
+(defun train-time-alerts-choose-lines ()
+  "List the alerts of lines read with completion; none means every line."
+  (interactive)
+  (train-time-alerts (train-time-alerts--read-routes)))
+
 (defun train-time-alerts--starts ()
   "Return the positions where alerts start, in order."
   (let ((pos (point-min))
@@ -533,6 +580,7 @@ With QUIET, do not complain when there is none."
     "zM" train-time-alerts-toggle-all
     "gj" train-time-alerts-next
     "gk" train-time-alerts-previous
+    "gl" train-time-alerts-choose-lines
     "q" quit-window)
   "Evil normal-state bindings for `train-time-alerts-mode'.")
 
@@ -543,6 +591,8 @@ With QUIET, do not complain when there is none."
     (define-key map (kbd "<backtab>") #'train-time-alerts-toggle-all)
     (define-key map "n" #'train-time-alerts-next)
     (define-key map "p" #'train-time-alerts-previous)
+    (define-key map "l" #'train-time-alerts-choose-lines)
+    (define-key map [mouse-1] #'train-time-alerts-mouse-select)
     map)
   "Keymap for `train-time-alerts-mode'.")
 
@@ -552,6 +602,7 @@ With QUIET, do not complain when there is none."
 \\{train-time-alerts-mode-map}"
   (setq truncate-lines nil)
   (setq-local revert-buffer-function #'train-time-alerts-refresh)
+  (train-time--watch-width #'train-time-alerts--render)
   (train-time-evil-setup 'train-time-alerts-mode train-time-alerts-mode-map
                          train-time-alerts--evil-bindings))
 
@@ -578,11 +629,12 @@ With QUIET, do not complain when there is none."
                                           when (equal n name) collect id)))))
 
 ;;;###autoload
-(defun train-time-alerts (&optional routes)
+(defun train-time-alerts (&optional routes alert-id)
   "List service alerts for ROUTES, a list of route IDs.
 Interactively, list them for the lines of the board, map or trip
 list at hand; elsewhere, or with a prefix argument, read the lines,
-where none means every line."
+where none means every line.  With ALERT-ID, show that alert's
+details and move to it."
   (interactive
    (list (let ((context (train-time-alerts--context-routes)))
            (if (or current-prefix-arg (eq context 'none))
@@ -599,6 +651,9 @@ where none means every line."
       (unless (derived-mode-p 'train-time-alerts-mode)
         (train-time-alerts-mode))
       (setq train-time-alerts--routes routes)
+      (when alert-id
+        (cl-pushnew alert-id train-time-alerts--expanded :test #'equal)
+        (setq train-time-alerts--focus alert-id))
       (train-time-alerts--refresh))
     (pop-to-buffer buffer)))
 

@@ -55,6 +55,11 @@
 ;;
 ;; M-x train-time-home-to-work and M-x train-time-work-to-home list
 ;; the next trips between `train-time-home' and `train-time-work'.
+;;
+;; In text terminals, including Termux on Android, turn on
+;; `xterm-mouse-mode' and everything can be done by tapping: buffers
+;; get a row of buttons (see `train-time-touch-bar'), and windows
+;; narrower than `train-time-compact-width' get a compact layout.
 
 ;;; Code:
 
@@ -134,6 +139,24 @@ the stations.  They are downloaded with the trains and reused for
   :type 'boolean
   :group 'train-time)
 
+(defcustom train-time-compact-width 80
+  "Windows narrower than this many columns get the compact layout.
+Meant for phones, it lists each train's line, destination, time
+and minutes only, grouped by direction; trip lists drop their
+travel time and status.  0 means never."
+  :type 'natnum
+  :group 'train-time)
+
+(defcustom train-time-touch-bar 'auto
+  "Whether train-time buffers start with a row of buttons.
+The buttons run the commonest commands with a click or a tap.
+t means always, nil never, and `auto' on text terminals, where
+Termux delivers taps as mouse clicks, and on Android."
+  :type '(choice (const :tag "On text terminals and Android" auto)
+                 (const :tag "Always" t)
+                 (const :tag "Never" nil))
+  :group 'train-time)
+
 (defvar train-time-fetch-function #'train-time-http-fetch
   "Function used to fetch feeds, called as (FUNCTION URL CALLBACK).
 CALLBACK receives a plist with either :data (unibyte string) or
@@ -159,6 +182,115 @@ CALLBACK receives a plist with either :data (unibyte string) or
 
 (defface train-time-destination '((t))
   "Face for destinations on boards, which are links to their boards.")
+
+(defface train-time-touch-button
+  '((((type tty)) :inverse-video t)
+    (t :inherit custom-button))
+  "Face for the buttons of the touch bar; see `train-time-touch-bar'.")
+
+;;;; Window width, buttons and the touch bar
+
+(defvar-local train-time--width nil
+  "Window width the buffer was last drawn for.")
+(defvar-local train-time--redraw-function nil
+  "Function redrawing the buffer when its window's width changes.")
+
+(defun train-time--window-width ()
+  "Return the body width of the window showing the current buffer.
+Prefer the selected window; without one, use the frame's width."
+  (let ((window (if (eq (window-buffer) (current-buffer))
+                    (selected-window)
+                  (get-buffer-window nil t))))
+    (if window (window-body-width window) (frame-width))))
+
+(defun train-time--compact-p (&optional width)
+  "Return non-nil if the compact layout suits WIDTH, by default the window's.
+See `train-time-compact-width'."
+  (< (or width (train-time--window-width)) train-time-compact-width))
+
+(defun train-time--width-changed (window)
+  "Redraw WINDOW's buffer if it was drawn for another width."
+  (with-current-buffer (window-buffer window)
+    (when (and train-time--redraw-function train-time--width
+               (/= train-time--width (window-body-width window)))
+      (funcall train-time--redraw-function))))
+
+(defun train-time--watch-width (redraw)
+  "Call REDRAW whenever the width of the current buffer's window differs.
+REDRAW must set `train-time--width'."
+  (setq train-time--redraw-function redraw)
+  (add-hook 'window-size-change-functions #'train-time--width-changed nil t))
+
+(defun train-time--fill (text width &optional indent)
+  "Return TEXT with each of its lines filled to WIDTH columns.
+Continuation lines keep the line's indentation, or with INDENT
+every line is indented by that many spaces instead."
+  (mapconcat
+   (lambda (line)
+     (if (string-blank-p line)
+         ""
+       (let ((prefix (if indent
+                         (make-string indent ?\s)
+                       (progn (string-match "\\`[ \t]*" line)
+                              (match-string 0 line)))))
+         (with-temp-buffer
+           (let ((fill-column width)
+                 (fill-prefix prefix))
+             (insert prefix (string-trim line))
+             (fill-region (point-min) (point-max))
+             (string-trim-right (buffer-string)))))))
+   (split-string text "\n")
+   "\n"))
+
+(defun train-time--button (label command &rest props)
+  "Return LABEL as a button running COMMAND interactively.
+PROPS are more button properties, such as `face' or `help-echo'."
+  (with-temp-buffer
+    (apply #'insert-text-button label
+           'action (lambda (_) (call-interactively command))
+           'follow-link t
+           'help-echo (or (plist-get props 'help-echo)
+                          (format "mouse-1, RET: %s" command))
+           props)
+    (buffer-string)))
+
+(defun train-time--touch-bar-p ()
+  "Return non-nil if buffers should show the touch bar."
+  (if (eq train-time-touch-bar 'auto)
+      (or (eq system-type 'android) (not (display-graphic-p)))
+    train-time-touch-bar))
+
+(defun train-time--touch-bar (items)
+  "Return a touch bar of ITEMS ending in a newline, or \"\" if there is none.
+ITEMS are (LABEL COMMAND) lists; the bar wraps at the window width."
+  (if (not (train-time--touch-bar-p))
+      ""
+    (let ((width (train-time--window-width))
+          (column 1)
+          (parts (list " ")))
+      (dolist (item items)
+        (let ((button (train-time--button (format " %s " (car item)) (cadr item)
+                                          'face 'train-time-touch-button
+                                          'train-time-touch-bar t)))
+          ;; The last column of a terminal window holds the wrap indicator.
+          (when (and (> column 1) (>= (+ column 1 (string-width button)) width))
+            (push "\n " parts)
+            (setq column 1))
+          (when (> column 1)
+            (push " " parts)
+            (cl-incf column))
+          (push button parts)
+          (cl-incf column (string-width button))))
+      (concat (apply #'concat (nreverse parts)) "\n"))))
+
+(defun train-time--skip-touch-bar ()
+  "Move point past the touch bar if it is on it."
+  (while (and (not (eobp))
+              (save-excursion
+                (forward-line 0)
+                (text-property-not-all (point) (line-end-position)
+                                       'train-time-touch-bar nil)))
+    (forward-line 1)))
 
 ;;;; HTTP
 
@@ -231,6 +363,8 @@ hide them; groups not listed show `train-time-group-max-rows'.")
 (defvar-local train-time--timer nil "Auto-refresh timer.")
 (defvar-local train-time--show-terminating nil
   "Buffer-local copy of `train-time-show-terminating'.")
+(defvar-local train-time--compact nil
+  "Non-nil if the board is drawn in the compact layout.")
 (defvar-local train-time--filters nil
   "Plist of active filters: :direction, :service, :route.")
 
@@ -298,21 +432,52 @@ ASSIGNED nil dims it as a scheduled trip."
   "Return a `tabulated-list-entries' element for ARRIVAL at time NOW."
   (let* ((assigned (train-time-arrival-assigned arrival))
          (minutes (train-time-minutes-until (train-time-arrival-time arrival) now))
-         (dim (lambda (s) (if assigned s (propertize s 'face 'train-time-scheduled)))))
+         (dim (lambda (s) (if assigned s (propertize s 'face 'train-time-scheduled))))
+         (time (funcall dim (train-time-format-clock (train-time-arrival-time arrival)
+                                                     train-time-mta-time-zone)))
+         (in (funcall dim (train-time--minutes-label minutes))))
     (list (cons (train-time-arrival-trip-id arrival)
                 (train-time-arrival-stop-id arrival))
-          (vector
-           (train-time--route-label arrival)
-           (funcall dim (train-time--service-label arrival))
-           (funcall dim (train-time--direction-label arrival))
-           (train-time--destination-cell arrival assigned)
-           (funcall dim (if (eq (train-time-arrival-event arrival) 'departure)
-                            "Departs" "Arrives"))
-           (funcall dim (train-time-format-clock (train-time-arrival-time arrival)
-                                                 train-time-mta-time-zone))
-           (funcall dim (train-time--minutes-label minutes))
-           (funcall dim (if assigned "Tracked" "Scheduled"))
-           (funcall dim (or (train-time-arrival-train-id arrival) ""))))))
+          (if train-time--compact
+              (vector (train-time--route-label arrival)
+                      (train-time--destination-cell arrival assigned)
+                      time in)
+            (vector
+             (train-time--route-label arrival)
+             (funcall dim (train-time--service-label arrival))
+             (funcall dim (train-time--direction-label arrival))
+             (train-time--destination-cell arrival assigned)
+             (funcall dim (if (eq (train-time-arrival-event arrival) 'departure)
+                              "Departs" "Arrives"))
+             time in
+             (funcall dim (if assigned "Tracked" "Scheduled"))
+             (funcall dim (or (train-time-arrival-train-id arrival) "")))))))
+
+(defconst train-time--wide-format
+  [("Line" 5 nil)
+   ("Service" 8 nil)
+   ("Toward" 18 nil)
+   ("Destination" 20 nil)
+   ("Event" 8 nil)
+   ("Time" 6 nil)
+   ("In" 8 nil :right-align t)
+   ("Status" 10 nil)
+   ("Train" 0 nil)]
+  "Board columns in the usual layout.")
+
+(defun train-time--set-format (width)
+  "Set the board's columns for a window WIDTH columns wide."
+  (let ((format (if train-time--compact
+                    ;; Padding, Line, Time and In take 21 columns, and
+                    ;; the last column must not reach the window edge.
+                    (vector '("Line" 5 nil)
+                            (list "Destination" (max 8 (- width 22)) nil)
+                            '("Time" 5 nil)
+                            '("In" 7 nil :right-align t))
+                  train-time--wide-format)))
+    (unless (equal format tabulated-list-format)
+      (setq tabulated-list-format format)
+      (tabulated-list-init-header))))
 
 (defun train-time--filtered (arrivals)
   "Return ARRIVALS that pass the buffer's filters."
@@ -355,9 +520,9 @@ ASSIGNED nil dims it as a scheduled trip."
            text)))
       ((not train-time--loading) "No data yet"))
      (when train-time--error
-       (concat "\n" (propertize (format "Last update failed: %s (g to retry)"
-                                        train-time--error)
-                                'face 'train-time-error)))
+       (concat "\n" (propertize (format "Last update failed: %s " train-time--error)
+                                'face 'train-time-error)
+               (train-time--button "(g to retry)" #'train-time-refresh)))
      (let ((alerts (and train-time-show-alerts (featurep 'train-time-alerts)
                         (train-time-alerts-summary (train-time--routes)
                                                    train-time--stations now))))
@@ -366,16 +531,22 @@ ASSIGNED nil dims it as a scheduled trip."
                         (cl-count-if #'train-time-arrival-terminating
                                      train-time--arrivals))))
        (when (and hidden (> hidden 0))
-         (format "\n%d terminating train%s hidden  (t to show)"
-                 hidden (if (= hidden 1) "" "s"))))
+         (concat (format "\n%d terminating train%s hidden  "
+                         hidden (if (= hidden 1) "" "s"))
+                 (train-time--button "(t to show)" #'train-time-toggle-terminating))))
      (let ((filters (train-time--filter-description)))
-       (when filters (format "\nFilters: %s  (c to clear)" filters)))
+       (when filters
+         (concat (format "\nFilters: %s  " filters)
+                 (train-time--button "(c to clear)" #'train-time-clear-filters))))
      (when train-time--timer
        (format "\nAuto refresh every %ds" train-time-auto-refresh-interval))
-     (when (train-time--complex-p)
-       (if (bound-and-true-p evil-local-mode)
-           "\nTAB more trains or fold   S-TAB fold all   gj/gk next/previous group"
-         "\nTAB more trains or fold   S-TAB fold all   M-n/M-p next/previous group"))
+     (when (train-time--grouped-p)
+       (cond ((train-time--touch-bar-p)
+              "\nTap a heading for more trains or to fold its group.")
+             ((bound-and-true-p evil-local-mode)
+              "\nTAB more trains or fold   S-TAB fold all   gj/gk next/previous group")
+             (t
+              "\nTAB more trains or fold   S-TAB fold all   M-n/M-p next/previous group")))
      "\n" train-time-mta-attribution)))
 
 (defun train-time--routes ()
@@ -395,6 +566,11 @@ STATIONS are the stations shown, which leave out other stations' notices."
 (defun train-time--complex-p ()
   "Return non-nil if this board lists several stations of a complex."
   (cdr train-time--stations))
+
+(defun train-time--grouped-p ()
+  "Return non-nil if this board groups trains by platform and direction.
+Complex boards always do; others do in the compact layout."
+  (or (train-time--complex-p) train-time--compact))
 
 (defun train-time--groups ()
   "Return this complex board's groups as (KEY STATION DIRECTION LABEL).
@@ -444,38 +620,49 @@ TOTAL trains are listed, or would be if the group were unfolded."
                'face 'train-time-group-count)
    "\n"))
 
+(defun train-time--shown-groups (rows)
+  "Return the groups listed for ROWS, each (GROUP . TRAINS).
+Groups that cannot have trains now are left out: terminal directions
+with arrivals hidden, and the other platforms under a filter."
+  (let ((filtered (train-time--filter-description)))
+    (cl-loop for group in (train-time--groups)
+             for trains = (cl-remove-if-not
+                           (lambda (a) (equal (train-time--group-key a) (car group)))
+                           rows)
+             when (or trains (and (nth 3 group) (not filtered)))
+             collect (cons group trains))))
+
+(defun train-time--group-limit (state groups)
+  "Return how many trains a group in STATE lists when GROUPS are shown.
+A lone group, as at a terminal, lists as many as a plain board."
+  (if (or (eq state 'all) (null (cdr groups)))
+      train-time-max-rows
+    train-time-group-max-rows))
+
 (defun train-time--print-groups (rows now)
   "Print ROWS at time NOW grouped by platform and direction.
 Set `tabulated-list-entries' to the entries printed."
-  (let ((filtered (train-time--filter-description))
-        entries)
-    (dolist (group (train-time--groups))
-      (pcase-let* ((`(,key ,station ,_direction ,label) group)
-                   (trains (cl-remove-if-not
-                            (lambda (a) (equal (train-time--group-key a) key))
-                            rows))
-                   (state (cdr (assoc key train-time--group-states)))
-                   (limit (if (eq state 'all) train-time-max-rows
-                            train-time-group-max-rows))
-                   (shown (cond ((eq state 'folded) nil)
-                                ((and limit (> (length trains) limit))
-                                 (seq-take trains limit))
-                                (t trains)))
-                   (start (point)))
-        ;; Skip groups that cannot have trains now: terminal directions
-        ;; with arrivals hidden, and the other platforms under a filter.
-        (when (or trains (and label (not filtered)))
-          (insert " " (train-time--group-heading
-                       station label state
-                       (if (eq state 'folded) (length trains) (length shown))
-                       (length trains)))
-          (dolist (arrival shown)
-            (let ((entry (train-time--entry arrival now)))
-              (push entry entries)
-              (funcall tabulated-list-printer (car entry) (cadr entry))))
-          (add-text-properties start (point)
-                               (list 'train-time-group key
-                                     'train-time-station station)))))
+  (let* ((groups (train-time--shown-groups rows))
+         entries)
+    (pcase-dolist (`((,key ,station ,_direction ,label) . ,trains) groups)
+      (let* ((state (cdr (assoc key train-time--group-states)))
+             (limit (train-time--group-limit state groups))
+             (shown (cond ((eq state 'folded) nil)
+                          ((and limit (> (length trains) limit))
+                           (seq-take trains limit))
+                          (t trains)))
+             (start (point)))
+        (insert " " (train-time--group-heading
+                     station label state
+                     (if (eq state 'folded) (length trains) (length shown))
+                     (length trains)))
+        (dolist (arrival shown)
+          (let ((entry (train-time--entry arrival now)))
+            (push entry entries)
+            (funcall tabulated-list-printer (car entry) (cadr entry))))
+        (add-text-properties start (point)
+                             (list 'train-time-group key
+                                   'train-time-station station))))
     (setq tabulated-list-entries (nreverse entries))))
 
 (defun train-time--restore-point (id group column)
@@ -498,11 +685,29 @@ Set `tabulated-list-entries' to the entries printed."
         (move-to-column column)
       (goto-char (point-min)))))
 
+(defun train-time--board-bar ()
+  "Return the touch bar of a board."
+  (train-time--touch-bar
+   `(("Refresh" train-time-refresh)
+     (,(if train-time--timer "Auto: on" "Auto: off") train-time-toggle-auto-refresh)
+     ("Station" train-time-select-station)
+     ("Line" train-time-filter-line)
+     ("Direction" train-time-filter-direction)
+     ,@(and train-time--filters '(("Clear" train-time-clear-filters)))
+     ("Alerts" train-time-alerts)
+     ("Map" train-time-map)
+     ("OSM" train-time-osm)
+     ("Quit" quit-window))))
+
 (defun train-time--render (&optional now)
   "Redisplay the current arrivals buffer as of NOW."
   (let* ((now (or now (funcall train-time-now-function)))
-         (rows (train-time--filtered train-time--arrivals)))
-    (if (train-time--complex-p)
+         (rows (train-time--filtered train-time--arrivals))
+         (width (train-time--window-width)))
+    (setq train-time--width width
+          train-time--compact (train-time--compact-p width))
+    (train-time--set-format width)
+    (if (train-time--grouped-p)
         (let ((id (tabulated-list-get-id))
               (group (get-text-property (point) 'train-time-group))
               (column (current-column))
@@ -522,7 +727,11 @@ Set `tabulated-list-entries' to the entries printed."
           (insert (if train-time--arrivals
                       "  No trains match the current filters.\n"
                     "  No upcoming trains in the feed.\n")))
-        (insert "\n" (train-time--status now) "\n")))
+        (insert "\n" (train-time--fill (train-time--status now) (max 20 (1- width)))
+                "\n")
+        (goto-char (point-min))
+        (insert (train-time--board-bar))))
+    (when (bobp) (train-time--skip-touch-bar))
     (setq mode-line-process
           (concat (cond (train-time--loading " updating")
                         (train-time--error " error")
@@ -724,26 +933,47 @@ Clicking a destination does the same."
   "Show details of the trip at point."
   (interactive)
   (let* ((id (or (tabulated-list-get-id) (user-error "No train on this line")))
-         (arrival (train-time--arrival-at id)))
-    (message "Trip %s, platform %s, train %s, %s, %s"
-             (train-time-arrival-trip-id arrival)
-             (train-time-arrival-stop-id arrival)
-             (or (train-time-arrival-train-id arrival) "unknown")
+         (arrival (train-time--arrival-at id))
+         (service (train-time--service-label arrival))
+         (toward (train-time--direction-label arrival))
+         (minutes (train-time-minutes-until (train-time-arrival-time arrival)
+                                            (funcall train-time-now-function))))
+    (message "%s%s to %s%s\n%s %s (%s), %s\nTrip %s, platform %s, train %s"
+             (string-trim (train-time--route-label arrival))
+             (if (string-empty-p service) "" (concat " " service))
+             (if (train-time-arrival-terminating arrival)
+                 "this station (terminates)"
+               (or (train-time-arrival-destination arrival) "?"))
+             (if (string-empty-p toward) "" (format ", toward %s" toward))
+             (if (eq (train-time-arrival-event arrival) 'departure) "Departs" "Arrives")
              (format-time-string "%Y-%m-%d %H:%M:%S %Z"
                                  (train-time-arrival-time arrival)
                                  train-time-mta-time-zone)
+             (train-time--minutes-label minutes)
              (if (train-time-arrival-assigned arrival)
                  "tracked train"
-               "scheduled, no train assigned yet"))))
+               "scheduled, no train assigned yet")
+             (train-time-arrival-trip-id arrival)
+             (train-time-arrival-stop-id arrival)
+             (or (train-time-arrival-train-id arrival) "unknown"))))
+
+(defun train-time-mouse-select (event)
+  "Act on the board line clicked in EVENT.
+Clicking a train describes it and clicking a group heading cycles
+the group, which suits touch screens."
+  (interactive "e")
+  (mouse-set-point event)
+  (cond ((tabulated-list-get-id) (train-time-describe-trip))
+        ((train-time--heading-p) (train-time-cycle-group))))
 
 ;;;; Complex board groups
 
 (defun train-time--group-at-point ()
   "Return the key of the complex board group at point, or signal an error."
   (or (get-text-property (point) 'train-time-group)
-      (user-error (if (train-time--complex-p)
+      (user-error (if (train-time--grouped-p)
                       "No platform here"
-                    "Only boards for station complexes have groups"))))
+                    "This board has no groups; it has them in narrow windows"))))
 
 (defun train-time-cycle-group ()
   "Cycle the group at point: more trains, then folded, then the usual few.
@@ -752,13 +982,14 @@ the first cycle lists up to `train-time-max-rows'."
   (interactive)
   (let* ((key (train-time--group-at-point))
          (state (cdr (assoc key train-time--group-states)))
-         (total (cl-count-if (lambda (a) (equal (train-time--group-key a) key))
-                             (train-time--filtered train-time--arrivals)))
+         (groups (train-time--shown-groups (train-time--filtered train-time--arrivals)))
+         (total (length (cdr (cl-assoc key groups :key #'car :test #'equal))))
+         (usual (train-time--group-limit nil groups))
          (next (pcase state
                  ('all 'folded)
                  ('folded nil)
-                 (_ (if (and train-time-group-max-rows
-                             (> total train-time-group-max-rows))
+                 (_ (if (and usual (> total usual)
+                             (not (eql usual (train-time--group-limit 'all groups))))
                         'all
                       'folded)))))
     (setq train-time--group-states
@@ -770,8 +1001,8 @@ the first cycle lists up to `train-time-max-rows'."
 (defun train-time-cycle-all-groups ()
   "Fold every group, or unfold them all if they already are."
   (interactive)
-  (unless (train-time--complex-p)
-    (user-error "Only boards for station complexes have groups"))
+  (unless (train-time--grouped-p)
+    (user-error "This board has no groups; it has them in narrow windows"))
   (let* ((keys (mapcar #'car (train-time--groups)))
          (all-folded (cl-every (lambda (k) (eq (cdr (assoc k train-time--group-states))
                                                'folded))
@@ -880,6 +1111,7 @@ mode body, which runs before Evil picks the buffer's initial state."
     (define-key map (kbd "M-n") #'train-time-next-group)
     (define-key map (kbd "M-p") #'train-time-previous-group)
     (define-key map (kbd "RET") #'train-time-describe-trip)
+    (define-key map [mouse-1] #'train-time-mouse-select)
     map)
   "Keymap for `train-time-mode'.")
 
@@ -887,19 +1119,11 @@ mode body, which runs before Evil picks the buffer's initial state."
   "Major mode listing upcoming trains at a station.
 
 \\{train-time-mode-map}"
-  (setq tabulated-list-format
-        [("Line" 5 nil)
-         ("Service" 8 nil)
-         ("Toward" 18 nil)
-         ("Destination" 20 nil)
-         ("Event" 8 nil)
-         ("Time" 6 nil)
-         ("In" 8 nil :right-align t)
-         ("Status" 10 nil)
-         ("Train" 0 nil)])
+  (setq tabulated-list-format train-time--wide-format)
   (setq tabulated-list-padding 1
         tabulated-list-sort-key nil)
   (setq-local revert-buffer-function #'train-time-refresh)
+  (train-time--watch-width #'train-time--render)
   (add-hook 'kill-buffer-hook #'train-time--stop-timer nil t)
   (tabulated-list-init-header)
   (train-time-evil-setup 'train-time-mode train-time-mode-map
@@ -1001,7 +1225,9 @@ The buffer is not displayed."
                 train-time--stations stations)))
       (train-time-refresh)
       ;; The chosen station's platforms are listed first.
-      (when moved (goto-char (point-min))))
+      (when moved
+        (goto-char (point-min))
+        (train-time--skip-touch-bar)))
     buffer))
 
 ;;;###autoload

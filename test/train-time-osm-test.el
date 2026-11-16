@@ -22,6 +22,9 @@
 (require 'dom)
 (require 'train-time-osm)
 
+;; Batch Emacs is a text terminal, where the touch bar is on by default.
+(setq train-time-touch-bar nil)
+
 (defun train-time-osm-test--parse (gpx)
   (with-temp-buffer
     (insert gpx)
@@ -68,7 +71,8 @@
           (lambda (_url callback) (funcall callback '(:error "offline"))))
          (train-time-auto-refresh nil)
          (inhibit-message t))
-     (cl-letf (((symbol-function 'osm-open)
+     (cl-letf (((symbol-function 'display-graphic-p) (lambda (&rest _) t))
+               ((symbol-function 'osm-open)
                 (lambda (file)
                   (push (list 'open file) train-time-osm-test--calls)
                   (with-current-buffer (if (eq major-mode 'osm-mode)
@@ -193,6 +197,54 @@
       (should (= (cl-count-if (lambda (b) (string-prefix-p "*osm" (buffer-name b)))
                               (buffer-list))
                  1)))))
+
+(ert-deftest train-time-osm-test-url ()
+  (let ((station (train-time-mta-station "701"))
+        (train-time-osm-zoom 16))
+    (should (equal (train-time-osm-url station)
+                   (concat "https://www.openstreetmap.org/?mlat=40.759600&mlon=-73.830030"
+                           "#map=16/40.759600/-73.830030")))
+    (should (equal (train-time-osm-url station 'geo)
+                   (concat "geo:40.759600,-73.830030?q=40.759600,-73.830030"
+                           "(Flushing-Main%20St)")))))
+
+(ert-deftest train-time-osm-test-terminal-browses ()
+  "In a text terminal, the station opens in a browser, not osm.el."
+  (let ((opened nil)
+        (inhibit-message t)
+        (train-time-osm-terminal 'web))
+    (cl-letf (((symbol-function 'display-graphic-p) #'ignore)
+              ((symbol-function 'executable-find) #'ignore)
+              ((symbol-function 'browse-url) (lambda (url &rest _) (push url opened)))
+              ((symbol-function 'osm-open) (lambda (_) (error "Should not be called"))))
+      (train-time-osm (train-time-mta-station "725"))
+      (should (equal opened (list (train-time-osm-url (train-time-mta-station "725"))))))))
+
+(ert-deftest train-time-osm-test-termux-open-url ()
+  "On Termux, termux-open-url hands the URI to Android."
+  (let ((calls nil)
+        (inhibit-message t)
+        (train-time-osm-terminal 'geo)
+        (browse-url-browser-function #'browse-url-default-browser))
+    (cl-letf (((symbol-function 'display-graphic-p) #'ignore)
+              ((symbol-function 'executable-find)
+               (lambda (name &rest _)
+                 (and (equal name "termux-open-url") "/data/bin/termux-open-url")))
+              ((symbol-function 'call-process)
+               (lambda (program _in _out _display &rest args)
+                 (push (cons program args) calls)
+                 0))
+              ((symbol-function 'browse-url) (lambda (&rest _) (error "Should not be called"))))
+      (train-time-osm (train-time-mta-station "701"))
+      (should (equal calls `(("/data/bin/termux-open-url"
+                              ,(train-time-osm-url (train-time-mta-station "701") 'geo))))))
+    ;; A customized browser is respected.
+    (let ((browse-url-browser-function #'eww-browse-url)
+          (browsed nil))
+      (cl-letf (((symbol-function 'executable-find) (lambda (&rest _) "/data/bin/x"))
+                ((symbol-function 'browse-url) (lambda (url &rest _) (setq browsed url))))
+        (train-time-osm--browse "https://example.org/")
+        (should (equal browsed "https://example.org/"))))))
 
 (ert-deftest train-time-osm-test-keys ()
   (should (eq (lookup-key train-time-mode-map "m") #'train-time-osm))

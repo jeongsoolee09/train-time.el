@@ -19,6 +19,9 @@
 (require 'cl-lib)
 (require 'train-time-map)
 
+;; Batch Emacs is a text terminal, where the touch bar is on by default.
+(setq train-time-touch-bar nil)
+
 (defmacro train-time-map-test--with-map (&rest body)
   "Open a fresh map at Flushing with an offline fetcher, then run BODY."
   (declare (indent 0))

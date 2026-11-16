@@ -32,6 +32,9 @@
 ;; have their own tests in train-time-alerts-test.el.
 (setq train-time-show-alerts nil)
 
+;; Batch Emacs is a text terminal, where the touch bar is on by default.
+(setq train-time-touch-bar nil)
+
 (defconst train-time-test--dir
   (file-name-directory (or load-file-name buffer-file-name)))
 

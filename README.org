@@ -242,6 +242,12 @@ OpenStreetMap, centered on the station:
 Only osm.el's public commands (=osm-open= with a generated GPX file,
 =osm-goto=) are used.  osm.el is optional; without it =m= just says so.
 
+osm.el draws images, so in a text terminal =m= opens the station on
+the OpenStreetMap website instead, or with =train-time-osm-terminal=
+set to =geo= as a =geo:= URI that Android hands to a map app.  On
+Termux this goes through =termux-open-url=; elsewhere through
+=browse-url=.
+
 ** Home and work
 
 Set your stations once, then ask for the next trains either way:
@@ -325,8 +331,10 @@ A lists the lines’ alerts.
   Outages of elevators that make the station accessible are
   highlighted.
 
-Station notices and boarding changes that name stations are shown on
-those stations' boards only.  =A= (or =M-x train-time-alerts=) opens a
+Each alert in the footer, and the planned-changes line, is a link:
+clicking (or =RET= on) one opens the alerts buffer with that alert's
+details shown.  Station notices and boarding changes that name
+stations are shown on those stations' boards only.  =A= (or =M-x train-time-alerts=) opens a
 buffer of every alert for the lines at point; called from elsewhere or
 with a prefix argument it asks for lines (empty for all):
 
@@ -335,6 +343,7 @@ with a prefix argument it asks for lines (empty for all):
 | =TAB=, =RET= / =za=       | Show or hide an alert's details     |
 | =S-TAB= / =zM=            | Show or hide every alert's details  |
 | =n= / =p= (=g j= / =g k=) | Next / previous alert               |
+| =l= / =g l=               | Alerts of other lines               |
 | =g= / =g r=               | Refresh                             |
 | =q=                       | Quit                                |
 
@@ -353,6 +362,57 @@ and
 [[https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fnyct_ene_equipments.json][equipment]]
 feeds.
 
+** Terminal and Termux
+
+Everything works in a text terminal (=emacs -nw=), including on an
+Android phone with [[https://termux.dev][Termux]], where the screen is
+narrow and a finger is the mouse.
+
+Setup on Termux:
+
+#+begin_src sh
+pkg install emacs termux-api   # termux-api provides termux-open-url
+#+end_src
+
+#+begin_src emacs-lisp
+(xterm-mouse-mode 1)           ; taps become mouse clicks
+(setq mouse-wheel-progressive-speed nil) ; steadier swipes
+#+end_src
+
+Termux reports a tap as a click and a swipe as the mouse wheel once
+=xterm-mouse-mode= is on; the Android port of Emacs turns taps into
+clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
+
+- *Narrow windows* (under =train-time-compact-width=, 80 columns) get a
+  compact layout: boards show Line, Destination, Time and In, grouped
+  by direction; trip lists drop Travel and Status; text is filled to
+  the window.  Buffers redraw when their window is resized.
+- *A touch bar* of buttons at the top of each buffer offers the main
+  commands (Refresh, Station, Line, Direction, Alerts, Map, OSM, Quit
+  and so on).  It is shown in text terminals and on Android; set
+  =train-time-touch-bar= to =t= or =nil= to force it.
+- *Taps:*
+
+  | Where                 | Tap                                           |
+  |-----------------------+-----------------------------------------------|
+  | Board: train          | Describe the train: service, times, trip IDs  |
+  | Board: destination    | Open that station's board                     |
+  | Board: group heading  | More trains, then fold, then back             |
+  | Navigator: station    | Select it; tap again for its board            |
+  | Navigator: legend     | Follow that stopping pattern                  |
+  | Navigator: title      | Show another line                             |
+  | Navigator: transfer   | Show that line at this station                |
+  | Trip list: trip       | Describe each train of the trip               |
+  | Alerts: alert         | Show or hide its details                      |
+  | Footer alert          | Open it in the alerts buffer                  |
+  | "(g to retry)" etc.   | Do it                                         |
+
+- Commands that ask for a station or line complete in the minibuffer:
+  press =TAB= and tap a candidate in =*Completions*=.
+- From a navigator under 80 columns wide, the board opens below it
+  rather than to its right.
+- =m= opens OpenStreetMap in the browser or a map app (see above).
+
 ** Customization
 
 =M-x customize-group RET train-time= — notable options:
@@ -366,7 +426,8 @@ feeds.
   =train-time-group-max-rows= (3)
 - =train-time-request-timeout=, =train-time-mta-feed-base-url=
 - =train-time-map-board-display= (=right=, =below= or =replace=)
-- =train-time-osm-zoom= (16)
+- =train-time-osm-zoom= (16), =train-time-osm-terminal= (=web= or =geo=)
+- =train-time-compact-width= (80), =train-time-touch-bar= (=auto=)
 - =train-time-home=, =train-time-work=, =train-time-transfer-time=
   (180 s), =train-time-commute-max-rows= (12)
 - =train-time-show-alerts=, =train-time-alerts-refresh-interval= (120 s)

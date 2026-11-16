@@ -47,7 +47,9 @@
   "Where RET in the network map shows the selected station's board.
 `right' splits the map window and shows the board to its right,
 `below' splits it and shows the board underneath, and `replace'
-shows the board in the map's own window (\\[quit-window] returns)."
+shows the board in the map's own window (\\[quit-window] returns).
+A map window too narrow for two side by side, under 80 columns as
+on a phone, is split below instead of right."
   :type '(choice (const :tag "Split, board on the right" right)
                  (const :tag "Split, board below" below)
                  (const :tag "Replace the map window" replace))
@@ -328,12 +330,16 @@ GAP is (COL . COL+1)."
     (dotimes (col (length columns))
       (let ((label (plist-get (aref columns col) :label))
             (text (train-time-map--describe-column col)))
-        (insert "  "
-                (propertize label 'face (train-time-map--column-face col))
-                (make-string (- (1+ width) (length label)) ?\s)
-                (if (= col train-time-map--col)
-                    (propertize text 'face 'bold)
-                  text)
+        (insert (propertize
+                 (concat "  "
+                         (propertize label 'face (train-time-map--column-face col))
+                         (make-string (- (1+ width) (length label)) ?\s)
+                         (if (= col train-time-map--col)
+                             (propertize text 'face 'bold)
+                           text))
+                 'train-time-map-column col
+                 'mouse-face 'highlight
+                 'help-echo (format "mouse-1: switch to %s" label))
                 "\n")))))
 
 (defun train-time-map--services-at (row)
@@ -366,52 +372,85 @@ the same complex."
           (push (cons id s) result))))
     (nreverse result)))
 
+(defun train-time-map--transfer-button (line-id station)
+  "Return LINE-ID's bullet as a button showing LINE-ID at STATION."
+  (with-temp-buffer
+    (insert-text-button (train-time-map--bullet line-id)
+                        'action (lambda (_) (train-time-map--show-line line-id station))
+                        'follow-link t
+                        'help-echo (format "mouse-1, RET: show %s"
+                                           (train-time-mta-line-title line-id)))
+    (buffer-string)))
+
 (defun train-time-map--describe-transfers (station)
-  "Describe the transfers available at STATION."
+  "Describe the transfers available at STATION.
+Each line's bullet is a button showing that line."
   (let ((groups nil))
     (dolist (tr (train-time-map--transfers station))
       (let ((name (train-time-station-name (cdr tr))))
-        (push (car tr) (alist-get name groups nil nil #'equal))))
+        (push tr (alist-get name groups nil nil #'equal))))
     (if (null groups)
         "none"
       (mapconcat (lambda (g)
-                   (concat (mapconcat #'train-time-map--bullet (reverse (cdr g)) " ")
+                   (concat (mapconcat (lambda (tr)
+                                        (train-time-map--transfer-button (car tr) (cdr tr)))
+                                      (reverse (cdr g)) " ")
                            (if (equal (car g) (train-time-station-name station))
                                ""
                              (format " (%s)" (car g)))))
                  (nreverse groups) ", "))))
 
-(defun train-time-map--insert-details ()
-  "Insert the description of the selected station."
+(defun train-time-map--insert-details (width)
+  "Insert the description of the selected station, filled to WIDTH."
   (let* ((station (train-time-map--selected-station))
          (dirs (train-time-station-directions station))
          (toward (delq nil (list (alist-get 'south dirs) (alist-get 'north dirs)))))
-    (insert "\n  "
-            (propertize (train-time-station-name station) 'face 'bold)
-            (format "  (stop %s)\n" (train-time-station-id station))
-            (format "  Services: %s\n" (train-time-map--services-at train-time-map--row))
-            (format "  Trains toward: %s\n"
-                    (if toward (string-join toward ", ") "none"))
-            (format "  Transfers: %s\n" (train-time-map--describe-transfers station))
-            (format "  Location: %.5f, %.5f\n"
-                    (train-time-station-lat station)
-                    (train-time-station-lon station)))))
+    (insert "\n"
+            (train-time--fill
+             (concat
+              "  " (propertize (train-time-station-name station) 'face 'bold)
+              (format "  (stop %s)\n" (train-time-station-id station))
+              (format "  Services: %s\n" (train-time-map--services-at train-time-map--row))
+              (format "  Trains toward: %s\n"
+                      (if toward (string-join toward ", ") "none"))
+              (format "  Transfers: %s\n" (train-time-map--describe-transfers station))
+              (format "  Location: %.5f, %.5f"
+                      (train-time-station-lat station)
+                      (train-time-station-lon station)))
+             width)
+            "\n")))
 
 (defun train-time-map--help-text ()
-  (if (bound-and-true-p evil-local-mode)
-      "j/k along the line   h/l switch service   RET arrivals   L line   t transfer   A alerts   m OSM   q quit"
-    "C-n/C-p along the line   C-f/C-b switch service   RET arrivals   L line   t transfer   A alerts   m OSM   q quit"))
+  "Return the reminder of the map's keys, or of its taps."
+  (cond
+   ((train-time--touch-bar-p)
+    "Tap a station to select it and again for its trains; tap a service above to follow it, a transfer's bullet to change lines.")
+   ((bound-and-true-p evil-local-mode)
+    "j/k along the line   h/l switch service   RET arrivals   L line   t transfer   A alerts   m OSM   q quit")
+   (t
+    "C-n/C-p along the line   C-f/C-b switch service   RET arrivals   L line   t transfer   A alerts   m OSM   q quit")))
 
 (defun train-time-map--render ()
   "Redraw the map and put point on the selected node."
   (let ((inhibit-read-only t)
         (nstations (length (train-time-map--stations)))
+        (width (train-time--window-width))
         target)
+    (setq train-time--width width)
     (erase-buffer)
-    (insert "\n  "
+    (insert (train-time--touch-bar '(("Board" train-time-map-open-board)
+                                     ("Line" train-time-map-choose-line)
+                                     ("Transfer" train-time-map-transfer)
+                                     ("Alerts" train-time-alerts)
+                                     ("OSM" train-time-osm)
+                                     ("Quit" quit-window)))
+            "\n  "
             (propertize (plist-get train-time-map--network :title)
                         'face (let ((color (plist-get train-time-map--network :color)))
-                                (if color `(:foreground ,color :weight bold) 'bold)))
+                                (if color `(:foreground ,color :weight bold) 'bold))
+                        'mouse-face 'highlight
+                        'help-echo "mouse-1: show another line"
+                        'train-time-map-title t)
             "\n\n")
     (train-time-map--insert-legend)
     (insert "\n")
@@ -422,11 +461,15 @@ the same complex."
       (train-time-map--station-row row)
       (when (< row (1- nstations))
         (train-time-map--link-row row)))
-    (train-time-map--insert-details)
-    (insert "\n  " (propertize (train-time-map--help-text) 'face 'train-time-map-help)
-            "\n  " (propertize (format "%s; schedule %s" train-time-mta-attribution
-                                       train-time-mta-data-version)
-                               'face 'train-time-map-help)
+    (train-time-map--insert-details (max 20 (1- width)))
+    (insert "\n" (train-time--fill (concat "  " (propertize (train-time-map--help-text)
+                                                         'face 'train-time-map-help)
+                                           "\n  " (propertize
+                                                   (format "%s; schedule %s"
+                                                           train-time-mta-attribution
+                                                           train-time-mta-data-version)
+                                                   'face 'train-time-map-help))
+                                   (max 20 (1- width)))
             "\n")
     (goto-char target)
     (dolist (window (get-buffer-window-list (current-buffer) nil t))
@@ -517,12 +560,26 @@ With prefix argument N, move N stops."
           (train-time-map--select row col))))))
 
 (defun train-time-map-mouse-select (event)
-  "Select the node or station clicked in EVENT."
+  "Select the node or station clicked in EVENT.
+Clicking the selected one again opens its board, clicking a
+service in the legend switches to it and clicking the title
+shows another line, which suits touch screens."
   (interactive "e")
   (let ((pos (event-start event)))
-    (with-selected-window (posn-window pos)
-      (goto-char (posn-point pos))
-      (train-time-map--sync-to-point))))
+    (select-window (posn-window pos))
+    (goto-char (posn-point pos))
+    (let ((node (get-text-property (point) 'train-time-map-node))
+          (column (get-text-property (point) 'train-time-map-column))
+          (selected (cons train-time-map--row train-time-map--col)))
+      (cond
+       (node
+        (train-time-map--sync-to-point)
+        (when (equal selected (cons train-time-map--row train-time-map--col))
+          (train-time-map-open-board)))
+       (column
+        (train-time-map--switch (- column train-time-map--col)))
+       ((get-text-property (point) 'train-time-map-title)
+        (call-interactively #'train-time-map-choose-line))))))
 
 ;;;; Lines and transfers
 
@@ -598,8 +655,12 @@ Where it appears depends on `train-time-map-board-display'."
   (let* ((map-buffer (current-buffer))
          (map-window (selected-window))
          (board (train-time-board (train-time-map--selected-station)))
-         (reuse train-time-map--board-window))
-    (if (eq train-time-map-board-display 'replace)
+         (reuse train-time-map--board-window)
+         (direction (if (and (eq train-time-map-board-display 'right)
+                             (< (window-total-width map-window) 80))
+                        'below
+                      train-time-map-board-display)))
+    (if (eq direction 'replace)
         (pop-to-buffer-same-window board)
       ;; Replace the board this map opened last, rather than splitting
       ;; again; recreating the window keeps `quit-window' deleting it.
@@ -612,9 +673,9 @@ Where it appears depends on `train-time-map-board-display'."
         (delete-window reuse))
       (pop-to-buffer board
                      `((display-buffer-reuse-window display-buffer-in-direction)
-                       (direction . ,train-time-map-board-display)
+                       (direction . ,direction)
                        (window . ,map-window)
-                       ,(if (eq train-time-map-board-display 'below)
+                       ,(if (eq direction 'below)
                             '(window-height . 0.5)
                           '(window-width . 0.5))))
       (let ((window (selected-window)))
@@ -681,6 +742,7 @@ Each column is a stopping pattern and each row a station.
         buffer-read-only t)
   (setq-local revert-buffer-function
               (lambda (&rest _) (train-time-map--render)))
+  (train-time--watch-width #'train-time-map--render)
   (train-time-evil-setup 'train-time-map-mode train-time-map-mode-map
                          train-time-map--evil-bindings))
 
