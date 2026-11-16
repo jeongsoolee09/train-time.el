@@ -692,7 +692,8 @@ line if STATION is on it, and otherwise switches to the first line
 stopping there; \\<train-time-map-mode-map>\\[train-time-map-choose-line] picks another."
   (interactive)
   (let* ((station (or station
-                      (and (derived-mode-p 'train-time-mode) train-time--station)))
+                      (and (derived-mode-p 'train-time-mode)
+                           (train-time-station-at-point))))
          (buffer (get-buffer-create train-time-map--buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'train-time-map-mode)

@@ -145,6 +145,37 @@ because no <A> exists."
                             (equal (train-time-station-complex s) complex)))
            train-time-mta-stations))))
 
+(defun train-time-mta-route-names (stations)
+  "Return the rider-facing route names serving STATIONS, in MTA order.
+X variants share their route's name: the 7 and <7> are both \"7\"."
+  (let ((ids (apply #'append (mapcar #'train-time-station-routes stations)))
+        names)
+    (dolist (route train-time-mta-data-routes)
+      (when (member (car route) ids)
+        (cl-pushnew (car (train-time-mta--route (car route))) names
+                    :test #'equal)))
+    (nreverse names)))
+
+(defun train-time-mta-complex-name (station)
+  "Return a name for the complex of STATION, unique among stations.
+That is the name most of its stations share, followed by the routes
+serving the complex when a station elsewhere has the same name, as
+the G's Fulton St does for the Fulton St complex in Manhattan."
+  (let* ((complex (train-time-mta-complex station))
+         (members (cl-remove-if-not (lambda (s) (memq s complex))
+                                    train-time-mta-stations))
+         (counts nil))
+    (dolist (s members)
+      (cl-incf (alist-get (train-time-station-name s) counts 0 nil #'equal)))
+    (let ((name (car (cl-reduce (lambda (best c) (if (> (cdr c) (cdr best)) c best))
+                                (nreverse counts)))))
+      (if (cl-some (lambda (s) (and (not (memq s complex))
+                                    (equal (train-time-station-name s) name)))
+                   train-time-mta-stations)
+          (format "%s (%s)" name
+                  (string-join (train-time-mta-route-names complex) " "))
+        name))))
+
 (defun train-time-mta-feed-urls (station)
   "Return the feed URLs carrying trains that stop at STATION."
   (let (feeds)

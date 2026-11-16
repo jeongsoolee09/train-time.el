@@ -38,6 +38,12 @@
 ;;   t  toggle terminating  S  select station
 ;;   RET  show trip details   m  show on OpenStreetMap (osm.el)
 ;;
+;; At a station with free transfers the board covers the whole
+;; complex (see `train-time-board-scope'), grouped by platform and
+;; direction:
+;;   TAB  more trains / fold the group   S-TAB  fold all groups
+;;   M-n / M-p  next / previous group
+;;
 ;; M-x train-time-map navigates a text diagram of each line, like
 ;; `undo-tree-visualize'; RET there opens a station's board.
 
@@ -89,7 +95,24 @@ Such trains cannot be boarded, so they are hidden by default."
   :group 'train-time)
 
 (defcustom train-time-max-rows 30
-  "Maximum number of trains to list, or nil for no limit."
+  "Maximum number of trains to list at a single station, or nil for no limit.
+Complex boards limit each group instead; see `train-time-group-max-rows'."
+  :type '(choice (const :tag "No limit" nil) natnum)
+  :group 'train-time)
+
+(defcustom train-time-board-scope 'complex
+  "What a board shows at a station with free transfers to others.
+`complex' lists the trains of every station in the complex, grouped
+by platform and direction: Grand Central shows the 4 5 6, the 7 and
+the S together.  `station' lists only the station chosen."
+  :type '(choice (const :tag "The whole station complex" complex)
+                 (const :tag "Only the chosen station" station))
+  :group 'train-time)
+
+(defcustom train-time-group-max-rows 3
+  "Trains listed per platform and direction on a complex board.
+nil means no limit.  \\<train-time-mode-map>\\[train-time-cycle-group] in a group cycles between this
+limit, `train-time-max-rows' trains and folding it away."
   :type '(choice (const :tag "No limit" nil) natnum)
   :group 'train-time)
 
@@ -109,6 +132,12 @@ CALLBACK receives a plist with either :data (unibyte string) or
 
 (defface train-time-scheduled '((t :inherit shadow))
   "Face for scheduled (not yet tracked) trains.")
+
+(defface train-time-group '((t :inherit bold))
+  "Face for platform and direction headings on complex boards.")
+
+(defface train-time-group-count '((t :inherit shadow))
+  "Face for the train counts on complex board headings.")
 
 ;;;; HTTP
 
@@ -159,7 +188,15 @@ CALLBACK receives a plist with either :data (unibyte string) or
 
 ;;;; Buffer state
 
-(defvar-local train-time--station nil "Station shown in this buffer.")
+(defvar-local train-time--station nil
+  "Station chosen for this buffer; its trains are listed first.")
+(defvar-local train-time--stations nil
+  "Stations whose trains this buffer lists, `train-time--station' first.
+On a complex board these include the stations it has free transfers to.")
+(defvar-local train-time--group-states nil
+  "Alist of (GROUP-KEY . STATE) on a complex board.
+STATE is `all' to list every train of the group or `folded' to
+hide them; groups not listed show `train-time-group-max-rows'.")
 (defvar-local train-time--arrivals nil "All arrivals from the last fetch.")
 (defvar-local train-time--feed-time nil
   "Header timestamp of the oldest feed shown.")
@@ -178,20 +215,24 @@ CALLBACK receives a plist with either :data (unibyte string) or
 
 ;;;; Rendering
 
-(defun train-time--route-label (arrival)
-  "Return the rider-facing route bullet for ARRIVAL, in the route's colors."
-  (let* ((route (train-time-arrival-route arrival))
-         (label (if (eq (train-time-arrival-service arrival) 'express)
-                    (format "<%s>" route)
-                  route))
-         (id (train-time-arrival-route-id arrival))
-         (color (and id (train-time-mta-route-color id))))
+(defun train-time--bullet (label route-id)
+  "Return LABEL as a bullet in the colors of ROUTE-ID, padded by spaces."
+  (let ((color (and route-id (train-time-mta-route-color route-id))))
     (if color
         (propertize (format " %s " label)
                     'face `(:background ,color
-                            :foreground ,(or (train-time-mta-route-text-color id) "white")
+                            :foreground ,(or (train-time-mta-route-text-color route-id)
+                                             "white")
                             :weight bold))
       (format " %s " label))))
+
+(defun train-time--route-label (arrival)
+  "Return the rider-facing route bullet for ARRIVAL, in the route's colors."
+  (let ((route (train-time-arrival-route arrival)))
+    (train-time--bullet (if (eq (train-time-arrival-service arrival) 'express)
+                            (format "<%s>" route)
+                          route)
+                        (train-time-arrival-route-id arrival))))
 
 (defun train-time--service-label (arrival)
   "Return the service pattern of ARRIVAL, or \"\" for routes without one."
@@ -231,11 +272,6 @@ CALLBACK receives a plist with either :data (unibyte string) or
            (funcall dim (train-time--minutes-label minutes))
            (funcall dim (if assigned "Tracked" "Scheduled"))
            (funcall dim (or (train-time-arrival-train-id arrival) ""))))))
-
-(defun train-time--sort-by-time (a b)
-  "Sort predicate ordering tabulated entries A and B by departure time."
-  (< (or (get-text-property 0 'train-time-time (aref (cadr a) 6)) 0)
-     (or (get-text-property 0 'train-time-time (aref (cadr b) 6)) 0)))
 
 (defun train-time--filtered (arrivals)
   "Return ARRIVALS that pass the buffer's filters."
@@ -291,23 +327,135 @@ CALLBACK receives a plist with either :data (unibyte string) or
        (when filters (format "\nFilters: %s  (c to clear)" filters)))
      (when train-time--timer
        (format "\nAuto refresh every %ds" train-time-auto-refresh-interval))
+     (when (train-time--complex-p)
+       (if (bound-and-true-p evil-local-mode)
+           "\nTAB more trains or fold   S-TAB fold all   gj/gk next/previous group"
+         "\nTAB more trains or fold   S-TAB fold all   M-n/M-p next/previous group"))
      "\n" train-time-mta-attribution)))
+
+(defun train-time--complex-p ()
+  "Return non-nil if this board lists several stations of a complex."
+  (cdr train-time--stations))
+
+(defun train-time--groups ()
+  "Return this complex board's groups as (KEY STATION DIRECTION LABEL).
+There is one group per platform direction, the chosen station's
+first.  KEY is (STATION-ID . DIRECTION); LABEL is nil at a
+terminal, where every train in that direction ends its trip."
+  (let (groups)
+    (dolist (station train-time--stations)
+      (dolist (dir (train-time-station-directions station))
+        (push (list (cons (train-time-station-id station) (car dir))
+                    station (car dir) (cdr dir))
+              groups)))
+    (nreverse groups)))
+
+(defun train-time--group-key (arrival)
+  "Return the key of the complex board group ARRIVAL belongs to."
+  (cons (train-time-mta--parent-stop (train-time-arrival-stop-id arrival))
+        (train-time-arrival-direction arrival)))
+
+(defun train-time--station-bullets (station)
+  "Return the colored bullets of the routes stopping at STATION."
+  (mapconcat (lambda (name)
+               (train-time--bullet
+                name (cl-find-if (lambda (id) (equal (car (train-time-mta--route id)) name))
+                                 (train-time-station-routes station))))
+             (train-time-mta-route-names (list station))
+             ""))
+
+(defun train-time--group-heading (station label state shown total)
+  "Return the heading of a group of STATION toward LABEL.
+STATE is the group's entry in `train-time--group-states'; SHOWN of
+TOTAL trains are listed, or would be if the group were unfolded."
+  (concat
+   (propertize (if (eq state 'folded) "▸ " "▾ ") 'face 'train-time-group)
+   (train-time--station-bullets station)
+   "  "
+   (propertize
+    (concat (unless (equal (train-time-station-name station)
+                           (train-time-station-name train-time--station))
+              (concat (train-time-station-name station) " · "))
+            (or label "Terminating here"))
+    'face 'train-time-group)
+   "  "
+   (propertize (cond ((zerop total) "no trains")
+                     ((< shown total) (format "%d of %d" shown total))
+                     (t (format "%d train%s" total (if (= total 1) "" "s"))))
+               'face 'train-time-group-count)
+   "\n"))
+
+(defun train-time--print-groups (rows now)
+  "Print ROWS at time NOW grouped by platform and direction.
+Set `tabulated-list-entries' to the entries printed."
+  (let ((filtered (train-time--filter-description))
+        entries)
+    (dolist (group (train-time--groups))
+      (pcase-let* ((`(,key ,station ,_direction ,label) group)
+                   (trains (cl-remove-if-not
+                            (lambda (a) (equal (train-time--group-key a) key))
+                            rows))
+                   (state (cdr (assoc key train-time--group-states)))
+                   (limit (if (eq state 'all) train-time-max-rows
+                            train-time-group-max-rows))
+                   (shown (cond ((eq state 'folded) nil)
+                                ((and limit (> (length trains) limit))
+                                 (seq-take trains limit))
+                                (t trains)))
+                   (start (point)))
+        ;; Skip groups that cannot have trains now: terminal directions
+        ;; with arrivals hidden, and the other platforms under a filter.
+        (when (or trains (and label (not filtered)))
+          (insert " " (train-time--group-heading
+                       station label state
+                       (if (eq state 'folded) (length trains) (length shown))
+                       (length trains)))
+          (dolist (arrival shown)
+            (let ((entry (train-time--entry arrival now)))
+              (push entry entries)
+              (funcall tabulated-list-printer (car entry) (cadr entry))))
+          (add-text-properties start (point)
+                               (list 'train-time-group key
+                                     'train-time-station station)))))
+    (setq tabulated-list-entries (nreverse entries))))
+
+(defun train-time--restore-point (id group column)
+  "Move to the entry with ID, else to the heading of GROUP, at COLUMN."
+  (goto-char (point-min))
+  (let ((found nil))
+    (when id
+      (while (and (not found) (not (eobp)))
+        (if (equal (tabulated-list-get-id) id)
+            (setq found t)
+          (forward-line 1))))
+    (unless found
+      (goto-char (point-min))
+      (when group
+        (while (and (not found) (not (eobp)))
+          (if (equal (get-text-property (point) 'train-time-group) group)
+              (setq found t)
+            (forward-line 1)))))
+    (if found
+        (move-to-column column)
+      (goto-char (point-min)))))
 
 (defun train-time--render (&optional now)
   "Redisplay the current arrivals buffer as of NOW."
   (let* ((now (or now (funcall train-time-now-function)))
          (rows (train-time--filtered train-time--arrivals)))
-    (when (and train-time-max-rows (> (length rows) train-time-max-rows))
-      (setq rows (cl-subseq rows 0 train-time-max-rows)))
-    (setq tabulated-list-entries
-          (mapcar (lambda (a)
-                    (let ((entry (train-time--entry a now)))
-                      (aset (cadr entry) 6
-                            (propertize (aref (cadr entry) 6)
-                                        'train-time-time (train-time-arrival-time a)))
-                      entry))
-                  rows))
-    (tabulated-list-print t)
+    (if (train-time--complex-p)
+        (let ((id (tabulated-list-get-id))
+              (group (get-text-property (point) 'train-time-group))
+              (column (current-column))
+              (inhibit-read-only t))
+          (erase-buffer)
+          (train-time--print-groups rows now)
+          (train-time--restore-point id group column))
+      (when (and train-time-max-rows (> (length rows) train-time-max-rows))
+        (setq rows (cl-subseq rows 0 train-time-max-rows)))
+      (setq tabulated-list-entries
+            (mapcar (lambda (a) (train-time--entry a now)) rows))
+      (tabulated-list-print t))
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (point-max))
@@ -368,8 +516,10 @@ does not blank a board that other feeds still update."
                 (let* ((feed (train-time-gtfs-rt-decode (plist-get result :data)))
                        (now (funcall train-time-now-function)))
                   (setcdr entry
-                          (list :arrivals (train-time-mta-arrivals
-                                           feed train-time--station now)
+                          (list :arrivals (mapcan (lambda (station)
+                                                    (train-time-mta-arrivals
+                                                     feed station now))
+                                                  train-time--stations)
                                 :feed-time (train-time-gtfs-rt-feed-time feed)))
                   (setq train-time--fetched-at now))
               (error
@@ -389,7 +539,7 @@ does not blank a board that other feeds still update."
     (user-error "Not in a train-time buffer"))
   (let ((buffer (current-buffer))
         (request (cl-incf train-time--request))
-        (urls (train-time-mta-feed-urls train-time--station)))
+        (urls (delete-dups (mapcan #'train-time-mta-feed-urls train-time--stations))))
     (setq train-time--pending (length urls)
           train-time--loading (> train-time--pending 0))
     (train-time--render)
@@ -438,13 +588,19 @@ With positive ARG enable it, with zero or negative ARG disable it."
 (defun train-time-filter-direction ()
   "Show only trains in one direction."
   (interactive)
-  (let* ((choices (delq nil
-                        (mapcar (lambda (d)
-                                  (cons (format "%s (%s)"
-                                                (capitalize (symbol-name (car d)))
-                                                (or (cdr d) "terminating"))
-                                        (car d)))
-                                (train-time-station-directions train-time--station))))
+  (let* ((labels nil)
+         (choices
+          (progn
+            ;; Platforms of a complex name the same direction differently.
+            (dolist (station train-time--stations)
+              (dolist (d (train-time-station-directions station))
+                (cl-pushnew (or (cdr d) "terminating")
+                            (alist-get (car d) labels) :test #'equal)))
+            (mapcar (lambda (d)
+                      (cons (format "%s (%s)" (capitalize (symbol-name (car d)))
+                                    (string-join (reverse (cdr d)) ", "))
+                            (car d)))
+                    (nreverse labels))))
          (choice (completing-read "Direction: " (cons "All" (mapcar #'car choices))
                                   nil t)))
     (train-time--set-filter :direction (cdr (assoc choice choices)))))
@@ -461,7 +617,7 @@ With positive ARG enable it, with zero or negative ARG disable it."
   (interactive)
   (let* ((routes (or (delete-dups (mapcar #'train-time-arrival-route
                                           train-time--arrivals))
-                     (train-time-station-routes train-time--station)))
+                     (train-time-mta-route-names train-time--stations)))
          (choice (completing-read "Line: " (cons "All" routes) nil t)))
     (train-time--set-filter :route (unless (equal choice "All") choice))))
 
@@ -495,6 +651,82 @@ With positive ARG enable it, with zero or negative ARG disable it."
              (if (train-time-arrival-assigned arrival)
                  "tracked train"
                "scheduled, no train assigned yet"))))
+
+;;;; Complex board groups
+
+(defun train-time--group-at-point ()
+  "Return the key of the complex board group at point, or signal an error."
+  (or (get-text-property (point) 'train-time-group)
+      (user-error (if (train-time--complex-p)
+                      "No platform here"
+                    "Only boards for station complexes have groups"))))
+
+(defun train-time-cycle-group ()
+  "Cycle the group at point: more trains, then folded, then the usual few.
+A group lists `train-time-group-max-rows' trains; when it has more,
+the first cycle lists up to `train-time-max-rows'."
+  (interactive)
+  (let* ((key (train-time--group-at-point))
+         (state (cdr (assoc key train-time--group-states)))
+         (total (cl-count-if (lambda (a) (equal (train-time--group-key a) key))
+                             (train-time--filtered train-time--arrivals)))
+         (next (pcase state
+                 ('all 'folded)
+                 ('folded nil)
+                 (_ (if (and train-time-group-max-rows
+                             (> total train-time-group-max-rows))
+                        'all
+                      'folded)))))
+    (setq train-time--group-states
+          (cons (cons key next) (cl-remove key train-time--group-states
+                                           :key #'car :test #'equal)))
+    (train-time--render)
+    (train-time--restore-point nil key 0)))
+
+(defun train-time-cycle-all-groups ()
+  "Fold every group, or unfold them all if they already are."
+  (interactive)
+  (unless (train-time--complex-p)
+    (user-error "Only boards for station complexes have groups"))
+  (let* ((keys (mapcar #'car (train-time--groups)))
+         (all-folded (cl-every (lambda (k) (eq (cdr (assoc k train-time--group-states))
+                                               'folded))
+                               keys))
+         (group (get-text-property (point) 'train-time-group)))
+    (setq train-time--group-states
+          (unless all-folded (mapcar (lambda (k) (cons k 'folded)) keys)))
+    (train-time--render)
+    (train-time--restore-point nil group 0)))
+
+(defun train-time--heading-p ()
+  "Return non-nil if point is on a group heading."
+  (and (get-text-property (point) 'train-time-group)
+       (not (tabulated-list-get-id))))
+
+(defun train-time-next-group (&optional n)
+  "Move to the heading of the Nth next group."
+  (interactive "p")
+  (let ((n (or n 1))
+        (step (if (< (or n 1) 0) -1 1)))
+    (dotimes (_ (abs n))
+      (let ((start (point))
+            (found nil))
+        (forward-line 0)
+        (while (and (not found) (zerop (forward-line step)) (not (eobp)))
+          (setq found (train-time--heading-p)))
+        (unless found
+          (goto-char start)
+          (user-error "No %s group" (if (< step 0) "previous" "next")))))))
+
+(defun train-time-previous-group (&optional n)
+  "Move to the heading of the Nth previous group."
+  (interactive "p")
+  (train-time-next-group (- (or n 1))))
+
+(defun train-time-station-at-point ()
+  "Return the station of the group at point, else the board's station."
+  (or (get-text-property (point) 'train-time-station)
+      train-time--station))
 
 ;;;; Evil integration
 
@@ -533,6 +765,12 @@ mode body, which runs before Evil picks the buffer's initial state."
     "t" train-time-toggle-terminating
     "S" train-time-select-station
     "m" train-time-osm
+    ,(kbd "TAB") train-time-cycle-group
+    "za" train-time-cycle-group
+    ,(kbd "<backtab>") train-time-cycle-all-groups
+    "zM" train-time-cycle-all-groups
+    "gj" train-time-next-group
+    "gk" train-time-previous-group
     ,(kbd "RET") train-time-describe-trip
     "q" quit-window)
   "Evil normal-state bindings for `train-time-mode'.")
@@ -549,6 +787,10 @@ mode body, which runs before Evil picks the buffer's initial state."
     (define-key map "t" #'train-time-toggle-terminating)
     (define-key map "S" #'train-time-select-station)
     (define-key map "m" #'train-time-osm)
+    (define-key map (kbd "TAB") #'train-time-cycle-group)
+    (define-key map (kbd "<backtab>") #'train-time-cycle-all-groups)
+    (define-key map (kbd "M-n") #'train-time-next-group)
+    (define-key map (kbd "M-p") #'train-time-previous-group)
     (define-key map (kbd "RET") #'train-time-describe-trip)
     map)
   "Keymap for `train-time-mode'.")
@@ -564,7 +806,7 @@ mode body, which runs before Evil picks the buffer's initial state."
          ("Destination" 20 nil)
          ("Event" 8 nil)
          ("Time" 6 nil)
-         ("In" 8 train-time--sort-by-time :right-align t)
+         ("In" 8 nil :right-align t)
          ("Status" 10 nil)
          ("Train" 0 nil)])
   (setq tabulated-list-padding 1
@@ -605,9 +847,21 @@ mode body, which runs before Evil picks the buffer's initial state."
                 table nil t nil nil default-name)))
     (cdr (assoc name table))))
 
+(defun train-time--board-stations (station)
+  "Return the stations a board for STATION lists, STATION first.
+See `train-time-board-scope'."
+  (if (eq train-time-board-scope 'complex)
+      (train-time-mta-complex station)
+    (list station)))
+
 (defun train-time--buffer-name (station)
-  "Return the name of STATION's arrivals buffer."
-  (format "*train-time: %s*" (train-time-station-display-name station)))
+  "Return the name of STATION's arrivals buffer.
+Boards for a complex are named after it, so every station in the
+complex shares one board."
+  (format "*train-time: %s*"
+          (if (cdr (train-time--board-stations station))
+              (train-time-mta-complex-name station)
+            (train-time-station-display-name station))))
 
 (defun train-time--show (station &optional buffer)
   "Display arrivals for STATION in BUFFER or a dedicated buffer."
@@ -619,7 +873,8 @@ Use BUFFER if non-nil, otherwise the station's dedicated buffer.
 The buffer is not displayed."
   (let ((buffer (or buffer
                     (get-buffer-create
-                     (train-time--buffer-name station)))))
+                     (train-time--buffer-name station))))
+        (moved nil))
     (with-current-buffer buffer
       (unless (derived-mode-p 'train-time-mode)
         (train-time-mode)
@@ -627,12 +882,21 @@ The buffer is not displayed."
         (when train-time-auto-refresh
           (train-time-toggle-auto-refresh 1)))
       (unless (eq station train-time--station)
-        (setq train-time--station station
-              train-time--arrivals nil
-              train-time--feed-results nil
-              train-time--feed-time nil
-              train-time--error nil))
-      (train-time-refresh))
+        (setq moved t)
+        (let ((stations (train-time--board-stations station)))
+          ;; Another station of the same complex only reorders the board.
+          (unless (and (= (length stations) (length train-time--stations))
+                       (null (cl-set-difference stations train-time--stations)))
+            (setq train-time--arrivals nil
+                  train-time--feed-results nil
+                  train-time--feed-time nil
+                  train-time--error nil
+                  train-time--group-states nil))
+          (setq train-time--station station
+                train-time--stations stations)))
+      (train-time-refresh)
+      ;; The chosen station's platforms are listed first.
+      (when moved (goto-char (point-min))))
     buffer))
 
 ;;;###autoload

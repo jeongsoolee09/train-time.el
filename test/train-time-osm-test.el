@@ -158,7 +158,7 @@
   (train-time-osm-test--with-stub-osm
     (train-time (train-time-mta-station "725"))
     (call-interactively #'train-time-osm)
-    (let ((board (train-time-osm-test--window "*train-time: Times Sq-42 St (7)*"))
+    (let ((board (train-time-osm-test--window "*train-time: Times Sq-42 St*"))
           (osm (train-time-osm-test--osm-window)))
       (should (= (length (window-list nil 'nomini)) 2))
       (should (= (train-time-osm-test--top osm) (train-time-osm-test--top board)))

@@ -154,7 +154,7 @@ With only one of them visible, split it to the right."
 
 (defun train-time-osm--station-at-point ()
   "Return the station of the current board or network map selection."
-  (cond ((derived-mode-p 'train-time-mode) train-time--station)
+  (cond ((derived-mode-p 'train-time-mode) (train-time-station-at-point))
         ((derived-mode-p 'train-time-map-mode)
          (train-time-map--sync-to-point)
          (train-time-map--selected-station))))

@@ -74,6 +74,51 @@ variants); it is blank for the others.
 above work unchanged in normal state.  Set =train-time-evil-bindings=
 to nil to opt out.
 
+** Station complexes
+
+At a station with free transfers to others, the board covers the whole
+station complex: Grand Central-42 St lists the 7, the 4 5 6 and the S
+together, and Times Sq-42 St has nine groups from five platforms,
+including the A C E at 42 St-Port Authority Bus Terminal.  Every
+station of a complex opens the same board, named after the complex;
+the station you came from is listed first.  In =M-x train-time-map=, =RET= on Grand
+Central opens it from the 7 as well as from the 4, 5 or 6.
+
+Trains are grouped by platform and direction, with the next
+=train-time-group-max-rows= (3) in each:
+
+#+begin_example
+ ▾  7   Queens  3 of 13
+  <7>  Express  Queens             Flushing-Main St     Arrives  16:13       now Tracked    07 1608+ 34H/MST
+  7    Local    Queens             Flushing-Main St     Arrives  16:15     2 min Tracked    07 1611+ 34H/MST
+  <7>  Express  Queens             Flushing-Main St     Arrives  16:19     6 min Tracked    07 1614+ 34H/MST
+ ▾  7   34 St - Hudson Yards  3 of 19
+  7    Local    34 St - Hudson Yards 34 St-Hudson Yards   Arrives  16:17     4 min Tracked    07 1546+ MST/34H
+  ...
+ ▾  4  5  6   Uptown & The Bronx  3 of 34
+  <6>  Express  Uptown & The Bronx Pelham Bay Park      Arrives  16:14     1 min Tracked    06 1557+ BBR/PEL
+  4             Uptown & The Bronx Woodlawn             Arrives  16:16     3 min Tracked    04 1546+ UTI/WDL
+  6    Local    Uptown & The Bronx Parkchester          Arrives  16:16     3 min Tracked    06 1602  BBR/177
+ ▾  4  5  6   Downtown & Brooklyn  3 of 53
+  ...
+ ▸  S   Times Sq  8 trains
+#+end_example
+
+Headings name the platform when it differs from the station you chose
+("42 St-Port Authority Bus Terminal · Uptown - Queens").  Directions in
+which every train ends its trip, such as the S arriving at Grand
+Central, are left out unless =t= shows terminating trains.  With a filter active only platforms with
+matching trains are shown, so =l A= at Times Sq leaves just the A C E.
+
+| Key           | Evil        | Command                                                           |
+|---------------+-------------+-------------------------------------------------------------------|
+| =TAB=         | =TAB=, =za= | Cycle the group: up to =train-time-max-rows= trains, folded, back |
+| =S-TAB=       | =zM=        | Fold every group, or unfold them all                              |
+| =M-n= / =M-p= | =gj= / =gk= | Next / previous group                                             |
+
+=m= and =M-x train-time-map= use the platform at point.  Set
+=train-time-board-scope= to =station= for the old one-station boards.
+
 ** Network navigator
 
 =M-x train-time-map= draws a line as a text diagram, in the spirit of
@@ -196,6 +241,8 @@ Only osm.el's public commands (=osm-open= with a generated GPX file,
 - =train-time-auto-refresh=, =train-time-auto-refresh-interval= (30 s)
 - =train-time-stale-threshold= (120 s)
 - =train-time-show-terminating=, =train-time-max-rows=
+- =train-time-board-scope= (=complex= or =station=),
+  =train-time-group-max-rows= (3)
 - =train-time-request-timeout=, =train-time-mta-feed-base-url=
 - =train-time-map-board-display= (=right=, =below= or =replace=)
 - =train-time-osm-zoom= (16)
@@ -230,7 +277,7 @@ Principles kept so far:
 
 A station is a GTFS parent stop such as ="701"=; its platforms add =N=
 or =S=.  Stations sharing a Complex ID in Stations.csv are connected
-by transfers, but each keeps its own board.
+by transfers and share one board (see [[*Station complexes][Station complexes]]).
 
 ** Line data
 
@@ -260,14 +307,14 @@ make test      # ERT suite; no network access
 #+end_src
 
 Tests use recorded, unmodified MTA responses in =test/fixtures/= (the
-1-7 feed, and the BDFM and NQRW feeds for Coney Island, a station
-served by two feeds) and an injected clock, so they are deterministic.
+1-7 feed, the BDFM and NQRW feeds for Coney Island, a station served by
+two feeds, and the 1-7, ACE and NQRW feeds recorded together for the
+Times Sq complex) and an injected clock, so they are deterministic.
 The generator is tested against a tiny made-up GTFS feed.
 
 * Roadmap
 
-1. *Milestone 3* — backend interface, favorites, caching; boards for a
-   whole station complex.
+1. *Milestone 3* — backend interface, favorites, caching.
 2. *Milestone 4* — Seoul (Open Data Plaza) and Tokyo (ODPT), with keys
    read through =auth-source=.
 3. *Milestone 5* — graphical schematic maps (SVG first; Canvas to be

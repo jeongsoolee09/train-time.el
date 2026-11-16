@@ -18,6 +18,9 @@
 ;; fixtures/mta-nyct-gtfs-{bdfm,nqrw}-20261116.pb are unmodified
 ;; responses from the nyct%2Fgtfs-bdfm and nyct%2Fgtfs-nqrw feeds,
 ;; with header timestamps 1794861313 and 1794861317 (15:35 EST).
+;; fixtures/mta-nyct-{gtfs,gtfs-ace,gtfs-nqrw}-20261116-1612.pb were
+;; fetched together for the Times Sq-42 St complex; their header
+;; timestamps are 1794863571, 1794863562 and 1794863572 (16:12 EST).
 
 ;;; Code:
 
@@ -32,14 +35,14 @@
 
 (defconst train-time-test--coney-time 1794861317)
 
-(defun train-time-test--fixture (&optional feed)
-  "Return the recorded MTA FEED (\"gtfs\" by default) as a unibyte string."
+(defun train-time-test--fixture (&optional feed recorded)
+  "Return the recorded MTA FEED (\"gtfs\" by default) as a unibyte string.
+RECORDED names the recording, \"20261116\" by default."
   (with-temp-buffer
     (set-buffer-multibyte nil)
     (insert-file-contents-literally
-     (expand-file-name (if (member feed '(nil "gtfs"))
-                           "fixtures/mta-nyct-gtfs-20261116.pb"
-                         (format "fixtures/mta-nyct-%s-20261116.pb" feed))
+     (expand-file-name (format "fixtures/mta-nyct-%s-%s.pb"
+                               (or feed "gtfs") (or recorded "20261116"))
                        train-time-test--dir))
     (buffer-string)))
 
@@ -173,6 +176,18 @@
                    '("127" "725" "902" "A27" "R16"))))
   (should (equal (train-time-mta-complex (train-time-mta-station "701"))
                  (list (train-time-mta-station "701")))))
+
+(ert-deftest train-time-test-mta-complex-name ()
+  (let ((name (lambda (id) (train-time-mta-complex-name (train-time-mta-station id)))))
+    (should (equal (funcall name "725") "Times Sq-42 St"))
+    (should (equal (funcall name "A27") "Times Sq-42 St"))
+    (should (equal (funcall name "723") "Grand Central-42 St"))
+    ;; The G's Fulton St in Brooklyn shares the name.
+    (should (equal (funcall name "A38") "Fulton St (A C J Z 2 3 4 5)"))
+    (should (equal (funcall name "701") "Flushing-Main St")))
+  (should (equal (train-time-mta-route-names
+                  (train-time-mta-complex (train-time-mta-station "723")))
+                 '("S" "4" "5" "6" "7"))))
 
 (ert-deftest train-time-test-mta-route-classification ()
   (should (equal (train-time-mta--route "7") '("7" . local)))
@@ -532,6 +547,190 @@
     (should (= (length train-time--arrivals) 46))
     (should (= train-time--feed-time 1794861317))
     (should (string-match-p "gtfs-bdfm: Request timed out" (train-time-test--text)))))
+
+;;;; Station complexes
+
+(defconst train-time-test--times-sq-time 1794863572)
+
+(defun train-time-test--times-sq-fetch (url callback)
+  "Answer URL from the Times Sq recordings, using CALLBACK."
+  (funcall callback
+           (list :data (train-time-test--fixture
+                        (replace-regexp-in-string "\\`.*%2F" "" url)
+                        "20261116-1612"))))
+
+(defun train-time-test--headings ()
+  "Return the complex board's group headings, without properties."
+  (let (headings)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (train-time--heading-p)
+          (push (string-trim (buffer-substring-no-properties
+                              (point) (line-end-position)))
+                headings))
+        (forward-line 1)))
+    (nreverse headings)))
+
+(ert-deftest train-time-test-complex-grand-central ()
+  (let (urls)
+    (train-time-test--with-station "723"
+        (lambda (url cb) (push url urls) (train-time-test--times-sq-fetch url cb))
+        train-time-test--times-sq-time
+      (should (equal (buffer-name) "*train-time: Grand Central-42 St*"))
+      (should (equal (mapcar #'train-time-station-id train-time--stations)
+                     '("723" "631" "901")))
+      ;; The 4 5 6, 7 and S share one feed, fetched once.
+      (should (equal urls (list (concat train-time-mta-feed-base-url "nyct%2Fgtfs"))))
+      ;; The chosen station's platforms come first; the S's arrivals
+      ;; from Times Sq all terminate here, so it has only one group.
+      (should (equal (train-time-test--headings)
+                     '("▾  7   Queens  3 of 13"
+                       "▾  7   34 St - Hudson Yards  3 of 19"
+                       "▾  4  5  6   Uptown & The Bronx  3 of 34"
+                       "▾  4  5  6   Downtown & Brooklyn  3 of 53"
+                       "▾  S   Times Sq  3 of 8")))
+      (should (= (length tabulated-list-entries) 15))
+      (let ((routes (delete-dups (mapcar #'train-time-arrival-route train-time--arrivals))))
+        (should (equal (sort routes #'string<) '("4" "5" "6" "7" "S"))))
+      ;; Rows know their platform.
+      (goto-char (point-min))
+      (search-forward "Pelham Bay Park")
+      (should (equal (train-time-station-id (train-time-station-at-point)) "631"))
+      (should (equal (cdr (tabulated-list-get-id)) "631N")))))
+
+(ert-deftest train-time-test-complex-times-sq ()
+  (let (urls)
+    (train-time-test--with-station "725"
+        (lambda (url cb) (push url urls) (train-time-test--times-sq-fetch url cb))
+        train-time-test--times-sq-time
+      (should (equal (buffer-name) "*train-time: Times Sq-42 St*"))
+      (should (equal (sort (mapcar #'train-time--feed-name urls) #'string<)
+                     '("gtfs" "gtfs-ace" "gtfs-nqrw")))
+      (should-not train-time--error)
+      (should (= train-time--feed-time 1794863562))
+      (should (equal (train-time-test--headings)
+                     '("▾  7   Queens  3 of 11"
+                       "▾  7   34 St - Hudson Yards  3 of 20"
+                       "▾  N  Q  R  W   Uptown & Queens  3 of 57"
+                       "▾  N  Q  R  W   Downtown & Brooklyn  3 of 45"
+                       "▾  A  C  E   42 St-Port Authority Bus Terminal · Uptown - Queens  3 of 48"
+                       "▾  A  C  E   42 St-Port Authority Bus Terminal · Downtown & Brooklyn  3 of 51"
+                       "▾  1  2  3   Uptown & The Bronx  3 of 34"
+                       "▾  1  2  3   Downtown & Brooklyn  3 of 36"
+                       "▾  S   Grand Central  3 of 7")))
+      (should (= (length tabulated-list-entries) 27))
+      (should (string-match-p "TAB more trains or fold" (train-time-test--text))))))
+
+(ert-deftest train-time-test-complex-groups ()
+  (train-time-test--with-station "725" #'train-time-test--times-sq-fetch
+      train-time-test--times-sq-time
+    (goto-char (point-min))
+    (should-error (train-time-previous-group) :type 'user-error)
+    (train-time-next-group 2)
+    (should (equal (get-text-property (point) 'train-time-group) '("R16" . north)))
+    ;; From a train, M-p goes to its own heading first.
+    (forward-line 2)
+    (train-time-previous-group)
+    (should (equal (get-text-property (point) 'train-time-group) '("R16" . north)))
+    (should (train-time--heading-p))
+    ;; TAB: up to `train-time-max-rows' trains, then folded, then three.
+    (train-time-cycle-group)
+    (should (member "▾  N  Q  R  W   Uptown & Queens  30 of 57" (train-time-test--headings)))
+    (should (= (length tabulated-list-entries) 54))
+    (should (equal (get-text-property (point) 'train-time-group) '("R16" . north)))
+    (train-time-cycle-group)
+    (should (member "▸  N  Q  R  W   Uptown & Queens  57 trains" (train-time-test--headings)))
+    (should (= (length tabulated-list-entries) 24))
+    (train-time-cycle-group)
+    (should (= (length tabulated-list-entries) 27))
+    ;; A group with no more trains than the limit folds at once.
+    (train-time-next-group 6)
+    (let ((train-time-group-max-rows 10))
+      (train-time-cycle-group)
+      (should (equal (car (last (train-time-test--headings)))
+                     "▸  S   Grand Central  7 trains"))
+      (train-time-cycle-group))
+    (should-error (train-time-next-group) :type 'user-error)
+    ;; Folding survives a refresh, which keeps point on the group.
+    (train-time-previous-group)
+    (train-time-cycle-group)
+    (train-time-cycle-group)
+    (revert-buffer)
+    (should (equal (get-text-property (point) 'train-time-group) '("127" . south)))
+    (should (member "▸  1  2  3   Downtown & Brooklyn  36 trains" (train-time-test--headings)))
+    ;; S-TAB folds everything, then unfolds everything.
+    (train-time-cycle-all-groups)
+    (should (null tabulated-list-entries))
+    (should (= (length (train-time-test--headings)) 9))
+    (train-time-cycle-all-groups)
+    (should (= (length tabulated-list-entries) 27))))
+
+(ert-deftest train-time-test-complex-filters ()
+  (train-time-test--with-station "725" #'train-time-test--times-sq-fetch
+      train-time-test--times-sq-time
+    ;; Filtering by line leaves only the platforms that line serves.
+    (train-time--set-filter :route "A")
+    (should (equal (train-time-test--headings)
+                   '("▾  A  C  E   42 St-Port Authority Bus Terminal · Uptown - Queens  3 of 18"
+                     "▾  A  C  E   42 St-Port Authority Bus Terminal · Downtown & Brooklyn  3 of 20")))
+    (train-time-clear-filters)
+    ;; Each platform names directions its own way.
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _) (setq offered table) "All")))
+        (train-time-filter-direction))
+      (should (equal offered
+                     '("All"
+                       "North (Queens, Uptown & Queens, Uptown - Queens, Uptown & The Bronx, terminating)"
+                       "South (34 St - Hudson Yards, Downtown & Brooklyn, Grand Central)"))))
+    (let (offered)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt table &rest _) (setq offered table) "All")))
+        (train-time-filter-line))
+      (should (equal (sort (cdr offered) #'string<)
+                     '("1" "2" "3" "7" "A" "C" "E" "N" "Q" "R" "S" "W"))))))
+
+(ert-deftest train-time-test-complex-feed-fails ()
+  (train-time-test--with-station "725"
+      (lambda (url cb)
+        (if (string-suffix-p "ace" url)
+            (funcall cb '(:error "HTTP status 503"))
+          (train-time-test--times-sq-fetch url cb)))
+      train-time-test--times-sq-time
+    ;; The A C E platform stays listed, saying it has no trains.
+    (should (member "▾  A  C  E   42 St-Port Authority Bus Terminal · Uptown - Queens  no trains"
+                    (train-time-test--headings)))
+    (should (string-match-p "gtfs-ace: HTTP status 503" (train-time-test--text)))))
+
+(ert-deftest train-time-test-complex-shared-board ()
+  (train-time-test--with-station "725" #'train-time-test--times-sq-fetch
+      train-time-test--times-sq-time
+    (let ((buffer (current-buffer)))
+      (train-time-next-group 8)
+      (train-time-cycle-group)
+      (train-time-cycle-group)
+      ;; Another station of the complex opens the same board, its
+      ;; platforms first, keeping the groups as they were.
+      (should (eq (train-time-board (train-time-mta-station "A27")) buffer))
+      (should (equal (train-time-station-id train-time--station) "A27"))
+      (should (equal (car (train-time-test--headings))
+                     "▾  A  C  E   Uptown - Queens  3 of 48"))
+      (should (member "▾  N  Q  R  W   Times Sq-42 St · Uptown & Queens  3 of 57"
+                      (train-time-test--headings)))
+      (should (member "▸  S   Times Sq-42 St · Grand Central  7 trains"
+                      (train-time-test--headings)))
+      (should (= (point) (point-min))))))
+
+(ert-deftest train-time-test-complex-scope-station ()
+  (let ((train-time-board-scope 'station))
+    (train-time-test--with-station "725" #'train-time-test--times-sq-fetch
+        train-time-test--times-sq-time
+      (should (equal (buffer-name) "*train-time: Times Sq-42 St (7)*"))
+      (should (equal train-time--stations (list train-time--station)))
+      (should (null (train-time-test--headings)))
+      (should (= (length tabulated-list-entries) 30))
+      (should-error (train-time-cycle-group) :type 'user-error))))
 
 (provide 'train-time-test)
 ;;; train-time-test.el ends here

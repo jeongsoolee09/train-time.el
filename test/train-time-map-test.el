@@ -263,5 +263,29 @@
       (quit-window)
       (should (equal (train-time-map-test--layout) '("*train-time-map*"))))))
 
+(ert-deftest train-time-map-test-board-complex ()
+  (train-time-map-test--with-map
+    (let ((train-time-map-board-display 'right)
+          (map-window (selected-window)))
+      (train-time-map--goto-station (train-time-mta-station "723"))
+      (train-time-map--render)
+      (train-time-map-open-board)
+      ;; Grand Central's board lists the 7, the 4 5 6 and the S.
+      (should (equal (train-time-map-test--layout)
+                     '("*train-time-map*" "*train-time: Grand Central-42 St*")))
+      (should (equal (mapcar #'train-time-station-id train-time--stations)
+                     '("723" "631" "901")))
+      ;; Over on the 4, the same board puts the 4 5 6 first.
+      (select-window map-window)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) "4  Lexington Avenue Express  at Grand Central-42 St (4 5 6)")))
+        (train-time-map-transfer))
+      (train-time-map-open-board)
+      (should (equal (train-time-map-test--layout)
+                     '("*train-time-map*" "*train-time: Grand Central-42 St*")))
+      (should (equal (mapcar #'train-time-station-id train-time--stations)
+                     '("631" "723" "901")))
+      (should (equal (get-text-property (point) 'train-time-group) '("631" . north))))))
+
 (provide 'train-time-map-test)
 ;;; train-time-map-test.el ends here
