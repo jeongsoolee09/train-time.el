@@ -11,9 +11,10 @@ Railway — all 496 stations in MTA's station list — using MTA's public
 GTFS-Realtime feeds.  No API key or account is needed.
 
 =M-x train-time-map= is a keyboard-driven text diagram of each line in
-the style of =undo-tree-visualize=.  Seoul, Tokyo, favorites,
-graphical maps and route planning are planned but not implemented
-yet; see [[*Roadmap][Roadmap]].
+the style of =undo-tree-visualize=.  =M-x train-time-home-to-work= and
+=M-x train-time-work-to-home= list the next trains between two saved
+stations.  Seoul, Tokyo, favorites, graphical maps and general route
+planning are planned but not implemented yet; see [[*Roadmap][Roadmap]].
 
 * Requirements
 
@@ -232,6 +233,61 @@ OpenStreetMap, centered on the station:
 Only osm.el's public commands (=osm-open= with a generated GPX file,
 =osm-goto=) are used.  osm.el is optional; without it =m= just says so.
 
+** Home and work
+
+Set your stations once, then ask for the next trains either way:
+
+| Command                      | Does                                          |
+|------------------------------+-----------------------------------------------|
+| =M-x train-time-set-home=    | Choose your home station and save it          |
+| =M-x train-time-set-work=    | Choose your work station and save it          |
+| =M-x train-time-home-to-work= | Next trips from home to work                 |
+| =M-x train-time-work-to-home= | Next trips from work to home                 |
+
+The stations are the customizable variables =train-time-home= and
+=train-time-work= (GTFS stop IDs, e.g. ="701"=), saved with Customize;
+you can also set them in your init file:
+
+#+begin_src emacs-lisp
+(setq train-time-home "701"    ; Flushing-Main St
+      train-time-work "R01")   ; Astoria-Ditmars Blvd
+#+end_src
+
+If one is unset, the trip commands ask for it and save it.  A trip
+buffer looks like:
+
+#+begin_example
+ Leave       In Trains     Change at                  Arrive  Travel Status
+ 16:26   13 min  7 → W     Queensboro Plaza           17:05   38 min Scheduled
+ 16:30   17 min  7 → N     Queensboro Plaza           17:09   39 min Scheduled
+#+end_example
+
+| Key (Emacs / Evil) | Action                                           |
+|--------------------+--------------------------------------------------|
+| =g= / =g r=        | Refresh                                          |
+| =RET=              | Describe each train: direction, times, stations  |
+| =r=                | Reverse: work → home, or home → work             |
+| =b=                | Board of the station where the trip at point starts |
+| =a=                | Toggle auto refresh                              |
+| =q=                | Quit                                             |
+
+How trips are found:
+
+- Trips are built from the trains in MTA's real-time feeds that serve
+  the home or work complex: one train that calls at both, or two trains
+  with one change at a station or complex both call at.  Home and work
+  mean their whole complex, so a 7 to Times Sq-42 St reaches work at
+  42 St-Port Authority.
+- A change needs =train-time-transfer-time= (180 s) between arriving
+  and the next train leaving.  Walking between complexes, two changes
+  or more, and trains not yet in the feeds (about 90 minutes ahead) are
+  not considered.
+- A trip is dropped when another leaves no earlier, arrives no later and
+  changes no more often; up to =train-time-commute-max-rows= (12) are
+  listed.  Trains whose prediction is only scheduled are dimmed.
+- Times are predictions.  The list is not a promise of the fastest
+  journey: delays, transfer walks and service changes are not known.
+
 ** Customization
 
 =M-x customize-group RET train-time= — notable options:
@@ -246,6 +302,8 @@ Only osm.el's public commands (=osm-open= with a generated GPX file,
 - =train-time-request-timeout=, =train-time-mta-feed-base-url=
 - =train-time-map-board-display= (=right=, =below= or =replace=)
 - =train-time-osm-zoom= (16)
+- =train-time-home=, =train-time-work=, =train-time-transfer-time=
+  (180 s), =train-time-commute-max-rows= (12)
 - =train-time-evil-bindings=
 
 * Design
@@ -260,6 +318,7 @@ Only osm.el's public commands (=osm-open= with a generated GPX file,
 | =train-time.el=         | Commands, =tabulated-list-mode= UI, async HTTP, refresh   |
 | =train-time-map.el=     | =M-x train-time-map= text network navigator               |
 | =train-time-osm.el=     | Optional osm.el view: GPX export + =osm-open=/=osm-goto=  |
+| =train-time-commute.el= | Home/work trips: one-change search over live trip updates |
 
 Principles kept so far:
 
@@ -320,7 +379,9 @@ The generator is tested against a tiny made-up GTFS feed.
 3. *Milestone 5* — graphical schematic maps (SVG first; Canvas to be
    evaluated), GTFS =shapes.txt= geometry for the osm.el view, more
    lines and interchanges in =train-time-map=.
-4. *Later* — =M-x train-route= and time-aware routing.
+4. *Later* — =M-x train-route= between any two stations, more than one
+   change, walking transfers and timetable-based (not only real-time)
+   routing.
 
 * Data and attribution
 

@@ -46,6 +46,9 @@
 ;;
 ;; M-x train-time-map navigates a text diagram of each line, like
 ;; `undo-tree-visualize'; RET there opens a station's board.
+;;
+;; M-x train-time-home-to-work and M-x train-time-work-to-home list
+;; the next trips between `train-time-home' and `train-time-work'.
 
 ;;; Code:
 
@@ -821,6 +824,14 @@ mode body, which runs before Evil picks the buffer's initial state."
   "Navigate the transit network diagram." t)
 (autoload 'train-time-osm "train-time-osm"
   "Show a station and its line on OpenStreetMap using osm.el." t)
+(autoload 'train-time-home-to-work "train-time-commute"
+  "List the next trips from home to work." t)
+(autoload 'train-time-work-to-home "train-time-commute"
+  "List the next trips from work to home." t)
+(autoload 'train-time-set-home "train-time-commute"
+  "Make a station your home station." t)
+(autoload 'train-time-set-work "train-time-commute"
+  "Make a station your work station." t)
 
 (defun train-time--station-candidate (station)
   "Return the completion candidate for STATION: its label and routes."
@@ -834,16 +845,19 @@ mode body, which runs before Evil picks the buffer's initial state."
                            " "))
       label)))
 
-(defun train-time--read-station ()
-  "Read a station with completion."
+(defun train-time--read-station (&optional prompt default-id)
+  "Read a station with completion, prompting with PROMPT.
+DEFAULT-ID is the stop ID offered by default, falling back to
+`train-time-default-station'."
   (let* ((table (mapcar (lambda (s) (cons (train-time--station-candidate s) s))
                         train-time-mta-stations))
-         (default (train-time-mta-station train-time-default-station))
+         (prompt (or prompt "Station"))
+         (default (train-time-mta-station (or default-id train-time-default-station)))
          (default-name (and default (train-time--station-candidate default)))
          (name (completing-read
                 (if default
-                    (format "Station (default %s): " default-name)
-                  "Station: ")
+                    (format "%s (default %s): " prompt default-name)
+                  (format "%s: " prompt))
                 table nil t nil nil default-name)))
     (cdr (assoc name table))))
 

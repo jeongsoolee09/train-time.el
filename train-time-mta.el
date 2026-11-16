@@ -271,5 +271,38 @@ guessed.  The result is sorted by time."
     (sort result (lambda (a b) (< (train-time-arrival-time a)
                                   (train-time-arrival-time b))))))
 
+(defun train-time-mta-trips (feed)
+  "Return the trips in decoded GTFS-Realtime FEED, with their stops.
+Each trip is a plist with :trip-id, :route-id, :train-id, :assigned
+and :calls, a list of (STATION-ID STOP-ID ARRIVAL DEPARTURE) in stop
+order.  ARRIVAL and DEPARTURE are POSIX times or nil; calls the feed
+marks as skipped or gives no time are left out."
+  (let (trips)
+    (dolist (tu (train-time-gtfs-rt-trip-updates feed))
+      (let* ((trip (plist-get tu :trip))
+             (nyct (plist-get trip :nyct))
+             calls)
+        (dolist (stu (plist-get tu :stop-time-update))
+          (let ((stop-id (plist-get stu :stop-id))
+                (arr (plist-get (plist-get stu :arrival) :time))
+                (dep (plist-get (plist-get stu :departure) :time)))
+            (setq arr (and arr (> arr 0) arr)
+                  dep (and dep (> dep 0) dep))
+            (when (and stop-id (or arr dep)
+                       (not (eql (plist-get stu :schedule-relationship)
+                                 train-time-gtfs-rt-stop-skipped)))
+              (push (list (train-time-mta--parent-stop stop-id) stop-id arr dep)
+                    calls))))
+        (when calls
+          (push (list :trip-id (plist-get trip :trip-id)
+                      :route-id (plist-get trip :route-id)
+                      :train-id (plist-get nyct :train-id)
+                      :assigned (if (plist-member nyct :is-assigned)
+                                    (plist-get nyct :is-assigned)
+                                  (null nyct))
+                      :calls (nreverse calls))
+                trips))))
+    (nreverse trips)))
+
 (provide 'train-time-mta)
 ;;; train-time-mta.el ends here
