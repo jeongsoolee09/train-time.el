@@ -154,15 +154,48 @@ With only one of them visible, split it to the right."
           (cons corner (if side-by-side 'below 'right)))
       (cons (or map board (selected-window)) 'right))))
 
+(defconst train-time-osm--min-split-width 80
+  "Columns a window needs before the OSM map is split off to its right.")
+
+(defconst train-time-osm--min-split-height 20
+  "Lines a window needs before the OSM map is split off below it.")
+
+(defun train-time-osm--splittable-p (window direction)
+  "Return non-nil if WINDOW is big enough to split toward DIRECTION."
+  (if (eq direction 'below)
+      (>= (window-total-height window) train-time-osm--min-split-height)
+    (>= (window-total-width window) train-time-osm--min-split-width)))
+
+(defun train-time-osm--spare-window (window)
+  "Return a window other than WINDOW to show the OSM map in, or nil.
+It shows neither the selected buffer nor the network map."
+  (let ((map (get-buffer-window "*train-time-map*")))
+    (cl-find-if (lambda (w)
+                  (not (memq w (list window map (selected-window)))))
+                (window-list nil 'nomini))))
+
+(defun train-time-osm--display-in-window (buffer alist)
+  "Show BUFFER in the live window under `train-time-osm-window' in ALIST."
+  (let ((window (alist-get 'train-time-osm-window alist)))
+    (when (window-live-p window)
+      (window--display-buffer buffer window 'reuse alist))))
+
 (defun train-time-osm--display-action ()
-  "Return the `display-buffer' action used for the OSM map."
-  (pcase-let ((`(,window . ,direction) (train-time-osm--placement)))
+  "Return the `display-buffer' action used for the OSM map.
+Splitting a window that is already small would leave the map, and
+later boards, ever smaller windows; reuse another window instead."
+  (pcase-let* ((`(,window . ,direction) (train-time-osm--placement))
+               (spare (and (not (train-time-osm--splittable-p window direction))
+                           (train-time-osm--spare-window window))))
     `((display-buffer-reuse-window
        display-buffer-reuse-mode-window
-       display-buffer-in-direction)
+       ,@(if spare
+             '(train-time-osm--display-in-window)
+           '(display-buffer-in-direction)))
       (mode . osm-mode)
       (window . ,window)
       (direction . ,direction)
+      (train-time-osm-window . ,spare)
       ,(if (eq direction 'below) '(window-height . 0.5) '(window-width . 0.5)))))
 
 ;;;; Command

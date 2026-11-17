@@ -198,6 +198,22 @@
                               (buffer-list))
                  1)))))
 
+(ert-deftest train-time-osm-test-no-ever-smaller-windows ()
+  "Opening boards and maps in turn doesn't keep splitting windows."
+  (train-time-osm-test--with-stub-osm
+    (train-time (train-time-mta-station "701"))
+    (delete-other-windows)
+    (dolist (id '("631" "725" "R16" "A27" "127"))
+      (train-time-osm (train-time-mta-station id))
+      ;; A new board replaces the map in its window, as with `S'.
+      (train-time (train-time-mta-station id))
+      (should (<= (length (window-list nil 'nomini)) 2)))
+    (train-time-osm (train-time-mta-station "701"))
+    (should (= (length (window-list nil 'nomini)) 2))
+    (should (eq (selected-window) (train-time-osm-test--osm-window)))
+    (dolist (w (window-list nil 'nomini))
+      (should (>= (window-total-width w) 30)))))
+
 (ert-deftest train-time-osm-test-url ()
   (let ((station (train-time-mta-station "701"))
         (train-time-osm-zoom 16))
