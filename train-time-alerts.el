@@ -208,14 +208,23 @@ COMPLEXES are station complex IDs.  Elevators come first."
       (car (cl-find name train-time-mta-data-routes
                     :key (lambda (r) (nth 1 r)) :test #'equal))))
 
+(defconst train-time-alerts--icons
+  '(("accessibility icon" . "♿")
+    ("shuttle bus icon" . "🚌")
+    ("airplane icon" . "✈"))
+  "Symbols for the bracketed icon names in MTA's alert text.")
+
 (defun train-time-alerts--bulletize (text)
-  "Return TEXT with route names like \"[7]\" shown as colored bullets."
+  "Return TEXT with route names like \"[7]\" shown as colored bullets.
+Icon names like \"[accessibility icon]\" become symbols."
   (replace-regexp-in-string
    "\\[\\([^]\n]+\\)\\]"
    (lambda (match)
      (let* ((name (match-string 1 match))
             (id (train-time-alerts--route-id name)))
-       (if id (train-time--bullet (train-time-mta-route-bullet id) id) match)))
+       (cond (id (train-time--bullet (train-time-mta-route-bullet id) id))
+             ((cdr (assoc name train-time-alerts--icons)))
+             (t match))))
    text t t))
 
 (defun train-time-alerts--fill (text indent width)
@@ -396,17 +405,32 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
                          ""))
     "Service alerts for every line"))
 
+(defun train-time-alerts--start-at (pos)
+  "Return where the alert at POS starts."
+  (car (last (cl-remove-if-not (lambda (s) (<= s pos)) (train-time-alerts--starts)))))
+
+(defun train-time-alerts--row (window pos)
+  "Return how many lines below WINDOW's start POS is; negative if above."
+  (let ((start (window-start window)))
+    (if (<= start pos)
+        (count-lines start pos)
+      (- (count-lines pos start)))))
+
 (defun train-time-alerts--render ()
-  "Redisplay the alerts buffer, keeping point on the same alert."
+  "Redisplay the alerts buffer, keeping point on the same alert.
+The alert also stays at the same height in the window showing it."
   (let* ((inhibit-read-only t)
          (now (funcall train-time-now-function))
          (width (train-time-alerts--width))
          (window-width (train-time--window-width))
-         (at (get-text-property (point) 'train-time-alert))
-         (line (and at (count-lines (car (last (cl-remove-if-not
-                                                 (lambda (s) (<= s (point)))
-                                                 (train-time-alerts--starts))))
-                                    (line-beginning-position))))
+         (window (get-buffer-window))
+         (pos (if window (window-point window) (point)))
+         (at (get-text-property pos 'train-time-alert))
+         (at-start (and at (train-time-alerts--start-at pos)))
+         (line (and at (count-lines at-start (save-excursion
+                                               (goto-char pos)
+                                               (line-beginning-position)))))
+         (row (and at window (train-time-alerts--row window at-start)))
          (selection (train-time-alerts-select train-time-alerts--routes now))
          (feed-time (plist-get (cdr (assq 'alerts train-time-alerts--cache)) :feed-time))
          (err (train-time-alerts--error 'alerts)))
@@ -451,9 +475,9 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
               (cond ((train-time--touch-bar-p)
                      "Tap an alert to show or hide its details; swipe to scroll.")
                     ((bound-and-true-p evil-local-mode)
-                     "TAB details   S-TAB all details   gj/gk next/previous   gr refresh   q quit")
+                     "RET details   S-TAB all details   C-j/C-k next/previous   gr refresh   q quit")
                     (t
-                     "TAB details   S-TAB all details   n/p next/previous   g refresh   q quit"))
+                     "RET details   S-TAB all details   n/p next/previous   g refresh   q quit"))
               'face 'shadow)
              (max 20 (1- window-width)))
             "\n" (train-time--fill train-time-mta-attribution (max 20 (1- window-width)))
@@ -474,7 +498,19 @@ STATIONS are `train-time-station's, as for `train-time-alerts-summary'."
                      (set-window-point window focus)
                      (set-window-start window (line-beginning-position 0))))
             (found (goto-char found)
-                   (forward-line line))
+                   (forward-line line)
+                   ;; Point was in details that are now hidden.
+                   (unless (equal (train-time-alert-id
+                                   (get-text-property (point) 'train-time-alert))
+                                  (train-time-alert-id at))
+                     (goto-char found))
+                   (when (window-live-p window)
+                     (set-window-point window (point))
+                     (set-window-start window (min (line-beginning-position)
+                                                   (save-excursion
+                                                     (goto-char found)
+                                                     (forward-line (- row))
+                                                     (point))))))
             (t (train-time-alerts-next 1 t))))))
 
 (defun train-time-alerts--refresh (&optional force)
@@ -575,11 +611,14 @@ With QUIET, do not complain when there is none."
   `("gr" train-time-alerts-refresh
     ,(kbd "TAB") train-time-alerts-toggle
     ,(kbd "RET") train-time-alerts-toggle
+    ,(kbd "<return>") train-time-alerts-toggle
     "za" train-time-alerts-toggle
     ,(kbd "<backtab>") train-time-alerts-toggle-all
     "zM" train-time-alerts-toggle-all
     "gj" train-time-alerts-next
     "gk" train-time-alerts-previous
+    ,(kbd "C-j") train-time-alerts-next
+    ,(kbd "C-k") train-time-alerts-previous
     "gl" train-time-alerts-choose-lines
     "q" quit-window)
   "Evil normal-state bindings for `train-time-alerts-mode'.")
@@ -591,6 +630,8 @@ With QUIET, do not complain when there is none."
     (define-key map (kbd "<backtab>") #'train-time-alerts-toggle-all)
     (define-key map "n" #'train-time-alerts-next)
     (define-key map "p" #'train-time-alerts-previous)
+    (define-key map (kbd "C-j") #'train-time-alerts-next)
+    (define-key map (kbd "C-k") #'train-time-alerts-previous)
     (define-key map "l" #'train-time-alerts-choose-lines)
     (define-key map [mouse-1] #'train-time-alerts-mouse-select)
     map)

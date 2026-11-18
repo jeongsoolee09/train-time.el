@@ -338,14 +338,17 @@ stations are shown on those stations' boards only.  =A= (or =M-x train-time-aler
 buffer of every alert for the lines at point; called from elsewhere or
 with a prefix argument it asks for lines (empty for all):
 
-| Key (Emacs / Evil)        | Action                              |
-|---------------------------+-------------------------------------|
-| =TAB=, =RET= / =za=       | Show or hide an alert's details     |
-| =S-TAB= / =zM=            | Show or hide every alert's details  |
-| =n= / =p= (=g j= / =g k=) | Next / previous alert               |
-| =l= / =g l=               | Alerts of other lines               |
-| =g= / =g r=               | Refresh                             |
-| =q=                       | Quit                                |
+| Key (Emacs / Evil)                       | Action                             |
+|------------------------------------------+------------------------------------|
+| =TAB=, =RET= / =za=                      | Show or hide an alert's details    |
+| =S-TAB= / =zM=                           | Show or hide every alert's details |
+| =n= / =p=, =C-j= / =C-k= (=g j= / =g k=) | Next / previous alert              |
+| =l= / =g l=                              | Alerts of other lines              |
+| =g= / =g r=                              | Refresh                            |
+| =q=                                      | Quit                               |
+
+Showing or hiding details keeps the alert where it was in the window.
+MTA's icon names in alert text appear as symbols (♿, 🚌, ✈).
 
 Alerts are downloaded at most every =train-time-alerts-refresh-interval=
 (120 s) and shared by all buffers; refreshing a board fetches them

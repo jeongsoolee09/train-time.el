@@ -272,9 +272,9 @@
 
 (ert-deftest train-time-alerts-test-bulletize ()
   (let ((text (train-time-alerts--bulletize
-               "Take the [7X] or [S] to [accessibility icon] [SIR]")))
+               "Take the [7X] or [S] to [accessibility icon] [SIR] or [shuttle bus icon]")))
     (should (equal (substring-no-properties text)
-                   "Take the  <7>  or  S  to [accessibility icon]  SIR "))
+                   "Take the  <7>  or  S  to ♿  SIR  or 🚌"))
     (should (get-text-property (string-match "<7>" text) 'face text))))
 
 (ert-deftest train-time-alerts-test-fill ()
@@ -369,6 +369,45 @@
     (should (equal (train-time-alert-id (get-text-property (point) 'train-time-alert))
                    "lmm:planned_work:31498"))
     (should-error (train-time-alerts-previous) :type 'user-error)))
+
+(ert-deftest train-time-alerts-test-keys ()
+  (should (eq (lookup-key train-time-alerts-mode-map (kbd "C-j")) #'train-time-alerts-next))
+  (should (eq (lookup-key train-time-alerts-mode-map (kbd "C-k"))
+              #'train-time-alerts-previous))
+  (let ((evil (cl-loop for (key cmd) on train-time-alerts--evil-bindings by #'cddr
+                       collect (cons key cmd))))
+    (should (eq (cdr (assoc (kbd "C-j") evil)) 'train-time-alerts-next))
+    (should (eq (cdr (assoc (kbd "C-k") evil)) 'train-time-alerts-previous))
+    (should (eq (cdr (assoc (kbd "RET") evil)) 'train-time-alerts-toggle))
+    (should (eq (cdr (assoc (kbd "<return>") evil)) 'train-time-alerts-toggle))))
+
+(defun train-time-alerts-test--heading-row ()
+  "Return the alert at point's ID and its heading's row in the window."
+  (list (train-time-alert-id (get-text-property (point) 'train-time-alert))
+        (train-time-alerts--row (selected-window)
+                                (train-time-alerts--start-at (point)))))
+
+(ert-deftest train-time-alerts-test-toggle-keeps-place ()
+  "Showing and hiding details leaves the alert where it was on screen."
+  (train-time-alerts-test--with
+    (train-time-alerts '("7"))
+    (delete-other-windows)
+    (train-time-alerts-next 3)
+    (set-window-start nil (save-excursion (forward-line -4) (point)))
+    (let ((before (train-time-alerts-test--heading-row))
+          (start (window-start)))
+      (should (equal (cadr before) 4))
+      (train-time-alerts-toggle)
+      (should (member (car before) train-time-alerts--expanded))
+      (should (equal (train-time-alerts-test--heading-row) before))
+      (should (= (window-start) start))
+      ;; Hiding the details point is in moves it to the heading.
+      (goto-char (1- (next-single-property-change (point) 'train-time-alert)))
+      (train-time-alerts-toggle)
+      (should-not (member (car before) train-time-alerts--expanded))
+      (should (equal (train-time-alerts-test--heading-row) before))
+      (should (= (point) (train-time-alerts--start-at (point))))
+      (should (= (window-start) start)))))
 
 (ert-deftest train-time-alerts-test-from-board ()
   (train-time-alerts-test--with
