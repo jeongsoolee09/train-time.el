@@ -104,8 +104,9 @@
 (ert-deftest train-time-route-test-buffer ()
   (train-time-route-test--with-defaults
     (let (opened)
-      (cl-letf (((symbol-function 'train-time)
-                 (lambda (station) (setq opened (train-time-station-id station)))))
+      (cl-letf (((symbol-function 'train-time-board)
+                 (lambda (station) (setq opened (train-time-station-id station))))
+                ((symbol-function 'train-time--display) #'ignore))
         (with-current-buffer (train-time-route (train-time-mta-station "G22")
                                                (train-time-mta-station "L08"))
           (unwind-protect

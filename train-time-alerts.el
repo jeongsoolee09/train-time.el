@@ -698,7 +698,7 @@ details and move to it."
         (cl-pushnew alert-id train-time-alerts--expanded :test #'equal)
         (setq train-time-alerts--focus alert-id))
       (train-time-alerts--refresh))
-    (pop-to-buffer buffer)))
+    (train-time--display buffer)))
 
 (provide 'train-time-alerts)
 ;;; train-time-alerts.el ends here

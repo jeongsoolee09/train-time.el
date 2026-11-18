@@ -291,6 +291,79 @@
         (should (= (nth 0 (window-edges map)) (nth 0 (window-edges board))))
         (should (> (nth 1 (window-edges board)) (nth 1 (window-edges map))))))))
 
+;;;; Window layout
+
+(defun train-time-touch-test--windows ()
+  "Return the buffer names of the frame's windows, left/top first."
+  (mapcar (lambda (w) (buffer-name (window-buffer w)))
+          (window-list nil 'nomini (frame-first-window))))
+
+(ert-deftest train-time-touch-test-layout-stack-on-phone ()
+  ;; The batch frame, 80 columns, is too small to split.
+  (train-time-map-test--with-map
+    (let ((train-time-window-layout 'auto))
+      (train-time-map-open-board)
+      (should (equal (train-time-touch-test--windows)
+                     '("*train-time: Flushing-Main St*")))
+      (quit-window)
+      (should (equal (train-time-touch-test--windows) '("*train-time-map*"))))))
+
+(ert-deftest train-time-touch-test-layout-split-right ()
+  (train-time-map-test--with-map
+    (let ((train-time-window-layout 'auto)
+          (train-time-split-width 40)
+          (map (selected-window)))
+      (train-time-map-open-board)
+      (should (equal (train-time-touch-test--windows)
+                     '("*train-time-map*" "*train-time: Flushing-Main St*")))
+      (should (= (window-pixel-top (selected-window)) (window-pixel-top map)))
+      ;; The map, opened from the board beside it, keeps its window.
+      (train-time-map)
+      (should (eq (selected-window) map))
+      (should (= (length (window-list nil 'nomini)) 2)))))
+
+(ert-deftest train-time-touch-test-layout-split-below ()
+  (train-time-map-test--with-map
+    (let ((train-time-window-layout 'auto)
+          (train-time-split-height 8)
+          (map (selected-window)))
+      (train-time-map-open-board)
+      (should (equal (train-time-touch-test--windows)
+                     '("*train-time-map*" "*train-time: Flushing-Main St*")))
+      (should (> (window-pixel-top (selected-window)) (window-pixel-top map)))
+      ;; The board, short while offline, is fitted to its text.
+      (should (>= (window-total-height map) 8))
+      (should (>= (window-total-height (selected-window)) 8))
+      (should (> (window-total-height map) (window-total-height (selected-window))))
+      (quit-window)
+      (should (equal (train-time-touch-test--windows) '("*train-time-map*"))))))
+
+(ert-deftest train-time-touch-test-layout-alerts ()
+  (train-time-alerts-test--with
+    (train-time-test--with-station "725" #'train-time-alerts-test--fetch
+        train-time-alerts-test--now
+      (let ((board (current-buffer)))
+        (switch-to-buffer board)
+        (delete-other-windows)
+        ;; Too small to split even below: alerts replace the board.
+        (let ((train-time-window-layout 'auto)
+              (train-time-split-height 8))
+          (call-interactively #'train-time-alerts)
+          (should (= (length (window-list nil 'nomini)) 1))
+          (should (derived-mode-p 'train-time-alerts-mode))
+          (quit-window)
+          (should (eq (window-buffer) board)))
+        (let ((train-time-window-layout 'stack))
+          (call-interactively #'train-time-alerts)
+          (should (= (length (window-list nil 'nomini)) 1))
+          (quit-window))
+        (let ((train-time-window-layout 'auto)
+              (train-time-split-width 40))
+          (call-interactively #'train-time-alerts)
+          (should (equal (car (train-time-touch-test--windows)) (buffer-name board)))
+          (should (derived-mode-p 'train-time-alerts-mode))
+          (should (= (length (window-list nil 'nomini)) 2)))))))
+
 ;;;; Trip list
 
 (ert-deftest train-time-touch-test-commute ()

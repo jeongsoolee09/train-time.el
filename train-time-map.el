@@ -43,14 +43,17 @@
 (require 'train-time)
 (require 'train-time-mta)
 
-(defcustom train-time-map-board-display 'right
+(defcustom train-time-map-board-display 'auto
   "Where RET in the network map shows the selected station's board.
+`auto' follows `train-time-window-layout': on a phone the board
+replaces the map, or takes the lower part of a tall map window.
 `right' splits the map window and shows the board to its right,
 `below' splits it and shows the board underneath, and `replace'
 shows the board in the map's own window (\\[quit-window] returns).
-A map window too narrow for two side by side, under 80 columns as
-on a phone, is split below instead of right."
-  :type '(choice (const :tag "Split, board on the right" right)
+With `right', a map window too narrow for two side by side, under
+80 columns, is split below instead."
+  :type '(choice (const :tag "Follow `train-time-window-layout'" auto)
+                 (const :tag "Split, board on the right" right)
                  (const :tag "Split, board below" below)
                  (const :tag "Replace the map window" replace))
   :group 'train-time)
@@ -688,16 +691,19 @@ Where it appears depends on `train-time-map-board-display'."
                  (with-current-buffer (window-buffer reuse)
                    (derived-mode-p 'train-time-mode)))
         (delete-window reuse))
-      (pop-to-buffer board
-                     `((display-buffer-reuse-window display-buffer-in-direction)
-                       (direction . ,direction)
-                       (window . ,map-window)
-                       ,(if (eq direction 'below)
-                            '(window-height . 0.5)
-                          '(window-width . 0.5))))
+      (if (eq direction 'auto)
+          (train-time--display board t)
+        (pop-to-buffer board
+                       `((display-buffer-reuse-window display-buffer-in-direction)
+                         (direction . ,direction)
+                         (window . ,map-window)
+                         ,(if (eq direction 'below)
+                              '(window-height . 0.5)
+                            '(window-width . 0.5)))))
       (let ((window (selected-window)))
-        (with-current-buffer map-buffer
-          (setq train-time-map--board-window window))))))
+        (unless (eq window map-window)
+          (with-current-buffer map-buffer
+            (setq train-time-map--board-window window)))))))
 
 ;;;; Mode
 
@@ -790,7 +796,9 @@ stopping there; \\<train-time-map-mode-map>\\[train-time-map-choose-line] picks 
                         (train-time-station-display-name station)))
           (train-time-map--set-line line)
           (train-time-map--goto-station station))))
-    (pop-to-buffer-same-window buffer)
+    (if (derived-mode-p 'train-time-mode)
+        (train-time--display buffer)
+      (pop-to-buffer-same-window buffer))
     (with-current-buffer buffer
       (train-time-map--render))))
 

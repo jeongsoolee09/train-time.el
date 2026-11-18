@@ -157,6 +157,37 @@ Termux delivers taps as mouse clicks, and on Android."
                  (const :tag "Never" nil))
   :group 'train-time)
 
+(defcustom train-time-window-layout 'auto
+  "Where train-time shows a buffer opened from another of its buffers.
+This covers a line's alerts, a station's board opened from the map,
+a trip list or a journey plan, and the map opened from a board.
+
+`stack' shows the new buffer in the same window, like the pages of
+a phone app; \\[quit-window] goes back.  `split' lets `pop-to-buffer'
+choose, usually splitting the window or using another one.  `auto'
+splits the window only when both halves keep enough room, side by
+side if it is at least twice `train-time-split-width' columns wide
+and, for a board opened from the map, one above the other if it is
+at least twice `train-time-split-height' lines tall.  Otherwise it
+stacks in a frame too small to split, as on a phone, and lets
+`pop-to-buffer' choose in a bigger one."
+  :type '(choice (const :tag "Split when there is room, else stack" auto)
+                 (const :tag "Same window" stack)
+                 (const :tag "Let `pop-to-buffer' choose" split))
+  :group 'train-time)
+
+(defcustom train-time-split-width 70
+  "Fewest columns each window keeps when `auto' layout splits side by side.
+See `train-time-window-layout'."
+  :type 'natnum
+  :group 'train-time)
+
+(defcustom train-time-split-height 16
+  "Fewest lines each window keeps when `auto' layout splits one above another.
+See `train-time-window-layout'."
+  :type 'natnum
+  :group 'train-time)
+
 (defvar train-time-fetch-function #'train-time-http-fetch
   "Function used to fetch feeds, called as (FUNCTION URL CALLBACK).
 CALLBACK receives a plist with either :data (unibyte string) or
@@ -317,6 +348,49 @@ ITEMS are (LABEL COMMAND) lists; the bar wraps at the window width."
                 (text-property-not-all (point) (line-end-position)
                                        'train-time-touch-bar nil)))
     (forward-line 1)))
+
+;;;; Windows
+
+(defun train-time--split-direction (window &optional below)
+  "Return how `auto' layout splits WINDOW for a new buffer, or nil.
+That is `right' if WINDOW is wide enough for two windows side by
+side and, with BELOW, `below' if it is tall enough for two stacked.
+See `train-time-window-layout'."
+  (cond ((>= (window-total-width window) (* 2 train-time-split-width)) 'right)
+        ((and below (>= (window-total-height window) (* 2 train-time-split-height)))
+         'below)))
+
+(defun train-time--fit-below (total)
+  "Return a `window-height' function for a window split off TOTAL lines.
+It fits the new window to its buffer, leaving the window above at
+least `train-time-split-height' lines and taking no fewer itself."
+  (lambda (window)
+    (fit-window-to-buffer window (- total train-time-split-height)
+                          train-time-split-height)))
+
+(defun train-time--display (buffer &optional below)
+  "Show BUFFER and select its window, following `train-time-window-layout'.
+BELOW non-nil lets `auto' layout split the selected window into one
+window above another when it is too narrow to split side by side."
+  (let* ((window (selected-window))
+         (direction (and (eq train-time-window-layout 'auto)
+                         (not (get-buffer-window buffer))
+                         (train-time--split-direction window below))))
+    (cond
+     (direction
+      (pop-to-buffer buffer
+                     `((display-buffer-in-direction)
+                       (direction . ,direction)
+                       (window . ,window)
+                       ,(if (eq direction 'right)
+                            '(window-width . 0.5)
+                          `(window-height
+                            . ,(train-time--fit-below (window-total-height window)))))))
+     ((or (eq train-time-window-layout 'stack)
+          (and (eq train-time-window-layout 'auto)
+               (< (frame-width (window-frame window)) (* 2 train-time-split-width))))
+      (pop-to-buffer buffer '((display-buffer-reuse-window display-buffer-same-window))))
+     (t (pop-to-buffer buffer)))))
 
 ;;;; HTTP
 

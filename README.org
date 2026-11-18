@@ -191,12 +191,13 @@ chosen line at the connected station.
 
 =train-time-map-board-display= decides where =RET= shows the board:
 
-- =right= (default) :: split the map window, board on the right
+- =auto= (default) :: follow =train-time-window-layout= (see [[*Windows][Windows]])
+- =right= :: split the map window, board on the right
 - =below= :: split the map window, board underneath
 - =replace= :: show the board in the map's window; =q= returns to the map
 
-With =right= and =below=, opening another station replaces the board
-the map opened last instead of splitting again.
+When it splits, opening another station replaces the board the map
+opened last instead of splitting again.
 
 The columns come from MTA's published schedule (see [[*Line data][Line data]]), so
 they show what the timetable for the current service period plans,
@@ -514,6 +515,23 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   rather than to its right.
 - =m= opens OpenStreetMap in the browser or a map app (see above).
 
+** Windows
+
+A buffer opened from another train-time buffer (a line's alerts, a
+station's board from the map, a trip list or a journey plan, the map
+from a board) goes where =train-time-window-layout= says:
+
+- =auto= (default) :: split only when both windows keep room to work:
+  side by side when the window is at least twice
+  =train-time-split-width= (70) columns wide, and for a board opened
+  from the map, one above the other when it is at least twice
+  =train-time-split-height= (16) lines tall; the board below is fitted
+  to its text.  A frame too small for that, like a phone's, stacks the
+  new buffer in the same window, and =q= goes back; a bigger frame
+  lets =pop-to-buffer= choose, which may use another window.
+- =stack= :: always the same window, like the pages of a phone app
+- =split= :: always let =pop-to-buffer= choose
+
 ** Customization
 
 =M-x customize-group RET train-time= — notable options:
@@ -526,7 +544,9 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 - =train-time-board-scope= (=complex= or =station=),
   =train-time-group-max-rows= (3)
 - =train-time-request-timeout=, =train-time-mta-feed-base-url=
-- =train-time-map-board-display= (=right=, =below= or =replace=)
+- =train-time-window-layout= (=auto=, =stack= or =split=),
+  =train-time-split-width= (70), =train-time-split-height= (16)
+- =train-time-map-board-display= (=auto=, =right=, =below= or =replace=)
 - =train-time-osm-zoom= (16), =train-time-osm-terminal= (=web= or =geo=)
 - =train-time-compact-width= (80), =train-time-touch-bar= (=auto=)
 - =train-time-home=, =train-time-work=, =train-time-transfer-time=

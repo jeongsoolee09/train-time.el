@@ -532,7 +532,8 @@ With positive ARG enable it, with zero or negative ARG disable it."
 With no trip at point, open the board of the origin."
   (interactive)
   (let ((legs (tabulated-list-get-id)))
-    (train-time (if legs (train-time-leg-from (car legs)) train-time-commute--origin))))
+    (train-time--display
+     (train-time-board (if legs (train-time-leg-from (car legs)) train-time-commute--origin)))))
 
 (defun train-time-commute-reverse ()
   "Show trips in the other direction."

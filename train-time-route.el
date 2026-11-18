@@ -321,7 +321,7 @@ for each change, so a slightly slower one with fewer changes wins."
   (let ((name (train-time-station-display-name station)))
     (with-temp-buffer
       (insert-text-button name
-                          'action (lambda (_) (train-time station))
+                          'action (lambda (_) (train-time--display (train-time-board station)))
                           'follow-link t
                           'help-echo (format "mouse-1, RET: trains at %s" name))
       (buffer-string))))
@@ -537,8 +537,10 @@ boards, else the origin."
   (let ((button (button-at (point)))
         (leg (get-text-property (point) 'train-time-route-leg)))
     (cond (button (button-activate button))
-          (leg (train-time (train-time-route-leg-from leg)))
-          (t (train-time train-time-route--origin)))))
+          (t (train-time--display
+              (train-time-board (if leg
+                                    (train-time-route-leg-from leg)
+                                  train-time-route--origin)))))))
 
 (defun train-time-route-mouse-select (event)
   "Open the board for the leg or station clicked in EVENT."
