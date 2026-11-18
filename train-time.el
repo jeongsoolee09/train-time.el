@@ -580,10 +580,16 @@ ASSIGNED nil dims it as a scheduled trip."
     (list (cons (train-time-arrival-trip-id arrival)
                 (train-time-arrival-stop-id arrival))
           (if train-time--compact
-              (vconcat (list (train-time--route-label arrival)
-                             (train-time--destination-cell arrival assigned))
-                       (and (train-time--clock-column-p) (list time))
-                       (list in))
+              (vconcat
+               (mapcar (lambda (column)
+                         (pcase column
+                           ('line (train-time--route-label arrival))
+                           ('service (funcall dim (train-time--service-label arrival)))
+                           ('destination (train-time--destination-cell arrival assigned))
+                           ('time time)
+                           ('in in)
+                           ('status (funcall dim (if assigned "Tracked" "Scheduled")))))
+                       (train-time--compact-columns)))
             (vector
              (train-time--route-label arrival)
              (funcall dim (train-time--service-label arrival))
@@ -613,17 +619,50 @@ Below 44 columns, as on a phone, the destination needs the room more;
 tapping a train still shows its time."
   (>= (or train-time--width 80) 44))
 
+(defconst train-time--wide-width 110
+  "Fewest columns the board's usual layout fits in.
+Narrower boards get the compact layout, with as many of its columns
+as fit; see `train-time--compact-columns'.")
+
+(defconst train-time--compact-format
+  '((line "Line" 5) (service "Service" 8) (destination "Destination" nil)
+    (time "Time" 5) (in "In" 7 :right-align t) (status "Status" 10))
+  "The compact board's columns: (KEY TITLE WIDTH . PROPS).")
+
+(defun train-time--board-compact-p (width)
+  "Return non-nil if a board WIDTH columns wide gets the compact layout."
+  (and (> train-time-compact-width 0)
+       (< width (max train-time-compact-width train-time--wide-width))))
+
+(defun train-time--compact-columns ()
+  "Return the keys of the compact board's columns at its width.
+Line, Destination and In always; Time from 44 columns, Service from
+64 and Status from 76, between them and the usual layout."
+  (let ((width (or train-time--width 80)))
+    (delq nil (list 'line
+                    (and (>= width 64) 'service)
+                    'destination
+                    (and (train-time--clock-column-p) 'time)
+                    'in
+                    (and (>= width 76) 'status)))))
+
 (defun train-time--set-format (width)
   "Set the board's columns for a window WIDTH columns wide."
   (let ((format (if train-time--compact
-                    ;; Padding, Line, Time and In take 21 columns, and
-                    ;; the last column must not reach the window edge.
-                    (vconcat (list '("Line" 5 nil))
-                             (if (train-time--clock-column-p)
-                                 (list (list "Destination" (max 8 (- width 22)) nil)
-                                       '("Time" 5 nil))
-                               (list (list "Destination" (max 8 (- width 16)) nil)))
-                             (list '("In" 7 nil :right-align t)))
+                    (let* ((columns (mapcar (lambda (key)
+                                              (assq key train-time--compact-format))
+                                            (train-time--compact-columns)))
+                           ;; Padding takes 2 columns, each column 1 more
+                           ;; than its width, and the last column must not
+                           ;; reach the window edge.
+                           (rest (- width 2 (apply #'+ (mapcar (lambda (c)
+                                                                 (1+ (or (nth 2 c) 0)))
+                                                               columns)))))
+                      (vconcat
+                       (mapcar (lambda (c)
+                                 (append (list (nth 1 c) (or (nth 2 c) (max 8 rest)) nil)
+                                         (nthcdr 3 c)))
+                               columns)))
                   train-time--wide-format)))
     (unless (equal format tabulated-list-format)
       (setq tabulated-list-format format)
@@ -724,8 +763,8 @@ STATIONS are the stations shown, which leave out other stations' notices."
 
 (defun train-time--header-status (now)
   "Return a header line telling the data's age and alerts at NOW.
-The compact layout shows it instead of column titles, so that a
-phone keeps it in view."
+Windows narrower than `train-time-compact-width' show it instead of
+column titles, so that a phone keeps it in view."
   (let* ((age (and train-time--feed-time (- now train-time--feed-time)))
          (alerts (train-time--alerts-mode-line (train-time--routes)
                                                train-time--stations now)))
@@ -904,7 +943,7 @@ Set `tabulated-list-entries' to the entries printed."
          (rows (train-time--filtered train-time--arrivals))
          (width (train-time--window-width)))
     (setq train-time--width width
-          train-time--compact (train-time--compact-p width))
+          train-time--compact (train-time--board-compact-p width))
     (train-time--set-format width)
     (if (train-time--grouped-p)
         (let ((id (tabulated-list-get-id))
@@ -946,7 +985,7 @@ Set `tabulated-list-entries' to the entries printed."
                          " stale"))
                   (train-time--alerts-mode-line (train-time--routes)
                                                 train-time--stations now)))
-    (when train-time--compact
+    (when (train-time--compact-p width)
       (setq header-line-format
             (replace-regexp-in-string "%" "%%" (train-time--header-status now))))
     (force-mode-line-update)))

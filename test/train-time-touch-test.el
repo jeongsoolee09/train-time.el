@@ -116,8 +116,10 @@
     (train-time-test--with-station "701" #'train-time-test--fixture-fetch
         train-time-test--fixture-time
       (should train-time--compact)
-      (should (equal (mapcar #'car tabulated-list-format) '("Line" "Destination" "Time" "In")))
-      (should (cl-every (lambda (e) (= (length (cadr e)) 4)) tabulated-list-entries))
+      ;; 80 columns have room for Service and Status too.
+      (should (equal (mapcar #'car tabulated-list-format)
+                     '("Line" "Service" "Destination" "Time" "In" "Status")))
+      (should (cl-every (lambda (e) (= (length (cadr e)) 6)) tabulated-list-entries))
       ;; Even a single station is grouped by direction in narrow windows.
       (should (train-time--grouped-p))
       (should (cl-some (lambda (h) (string-match-p "Manhattan" h))
@@ -150,6 +152,29 @@
       (delete-other-windows)
       (train-time--width-changed (selected-window))
       (should-not train-time--compact))))
+
+(ert-deftest train-time-touch-test-medium-board ()
+  ;; Between a phone and the usual layout, the compact board gains
+  ;; Service and Status rather than overflowing the window.
+  (let ((train-time--wide-width 110))
+    (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+        train-time-test--fixture-time
+      (delete-other-windows)
+      (should train-time--compact)
+      (should (equal (mapcar #'car tabulated-list-format)
+                     '("Line" "Service" "Destination" "Time" "In" "Status")))
+      (should (cl-every (lambda (e) (= (length (cadr e)) 6)) tabulated-list-entries))
+      (should (member "Local" (mapcar (lambda (e) (substring-no-properties (aref (cadr e) 1)))
+                                      tabulated-list-entries)))
+      (goto-char (point-min))
+      (let ((width (window-body-width)))
+        (while (not (eobp))
+          (should (< (string-width (buffer-substring (point) (line-end-position)))
+                     width))
+          (forward-line 1)))
+      (split-window-right)
+      (train-time--width-changed (selected-window))
+      (should (equal (mapcar #'car tabulated-list-format) '("Line" "Destination" "In"))))))
 
 (ert-deftest train-time-touch-test-board-taps ()
   (let ((train-time-compact-width 200))

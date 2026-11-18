@@ -44,8 +44,8 @@
 `full' lists every alert in effect and every elevator or escalator
 outage at the stations, filled to the window.  `brief' gives each
 alert in effect one line, cut to the window, and counts planned
-work and outages on one more.  `auto' is brief in the compact
-layout, as on a phone, and full otherwise."
+work and outages on one more.  `auto' is brief in windows narrower
+than `train-time-compact-width', as on a phone, and full otherwise."
   :type '(choice (const :tag "Brief in narrow windows" auto)
                  (const :tag "Full" full)
                  (const :tag "Brief" brief))
@@ -313,7 +313,7 @@ TEXT keeps its own faces; the link only highlights under the mouse."
 See `train-time-alerts-footer'."
   (pcase train-time-alerts-footer
     ('brief t)
-    ('auto train-time--compact)))
+    ('auto (train-time--compact-p (or train-time--width (train-time--window-width))))))
 
 (defun train-time-alerts--brief-summary (routes current planned outages width)
   "Return a footer of one line per alert in CURRENT, then one more.

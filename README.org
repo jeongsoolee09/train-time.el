@@ -479,7 +479,9 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 - *Narrow windows* (under =train-time-compact-width=, 80 columns) get a
   compact layout: boards show Line, Destination, Time and In, grouped
   by direction; trip lists drop Travel and Status; text is filled to
-  the window.  Buffers redraw when their window is resized.  A board's
+  the window.  Buffers redraw when their window is resized.  Boards
+  too narrow for the usual table (110 columns) keep the grouped
+  layout, adding Service from 64 columns and Status from 76.  A board's
   header line then tells the data's age instead of the column titles
   (=16:12:42 · 18m old · STALE · ⚠6=; tap =⚠6= for the alerts), and
   the alerts at the end get one line each (=train-time-alerts-footer=).

@@ -35,6 +35,10 @@
 ;; Batch Emacs is a text terminal, where the touch bar is on by default.
 (setq train-time-touch-bar nil)
 
+;; Batch Emacs has an 80-column window, where most tests want the
+;; usual board layout; train-time-touch-test.el covers narrower ones.
+(setq train-time--wide-width 80)
+
 (defconst train-time-test--dir
   (file-name-directory (or load-file-name buffer-file-name)))
 
