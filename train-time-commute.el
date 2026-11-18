@@ -518,7 +518,7 @@ With positive ARG enable it, with zero or negative ARG disable it."
   "Describe each train of the trip at point."
   (interactive)
   (let ((legs (or (tabulated-list-get-id) (user-error "No trip on this line"))))
-    (train-time--echo (mapconcat #'train-time-commute--describe-leg legs "\n"))))
+    (train-time--describe (mapconcat #'train-time-commute--describe-leg legs "\n"))))
 
 (defun train-time-commute-mouse-select (event)
   "Describe the trip clicked in EVENT, which suits touch screens."

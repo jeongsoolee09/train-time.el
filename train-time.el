@@ -264,6 +264,64 @@ See `train-time-compact-width'."
                     (train-time--fill text (max 20 (1- (frame-width))))
                   text)))
 
+(defcustom train-time-describe-display 'auto
+  "Where tapping or describing a train shows its details.
+`echo' uses the echo area, which the next message replaces.
+`window' uses a small window at the bottom of the frame, which
+stays until closed or replaced by the next train's.  `auto' uses
+the window where the touch bar is shown in a narrow frame, as on
+a phone, and the echo area elsewhere."
+  :type '(choice (const :tag "Window on phones, else echo area" auto)
+                 (const :tag "Echo area" echo)
+                 (const :tag "Window at the bottom" window))
+  :group 'train-time)
+
+(defconst train-time--peek-buffer "*train-time: details*")
+
+(defun train-time-close-details ()
+  "Close the window showing a train's details."
+  (interactive)
+  (let ((window (get-buffer-window train-time--peek-buffer)))
+    (when window
+      (delete-window window))))
+
+(defvar train-time-details-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map "q" #'train-time-close-details)
+    map)
+  "Keymap for `train-time-details-mode'.")
+
+(define-derived-mode train-time-details-mode special-mode "Train-Details"
+  "Mode for the window showing a train's details.")
+
+(defun train-time--peek-p ()
+  "Return non-nil if details go to a window; see `train-time-describe-display'."
+  (pcase train-time-describe-display
+    ('window t)
+    ('auto (and (train-time--touch-bar-p) (train-time--narrow-frame-p)))))
+
+(defun train-time--describe (text)
+  "Show TEXT, a train's details, where `train-time-describe-display' says."
+  (if (not (train-time--peek-p))
+      (train-time--echo text)
+    (let ((buffer (get-buffer-create train-time--peek-buffer))
+          (width (max 20 (- (frame-width) 2))))
+      (with-current-buffer buffer
+        (train-time-details-mode)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (train-time--button " Close ✕ " #'train-time-close-details
+                                      'face 'train-time-touch-button)
+                  "\n" (train-time--fill text width))
+          (goto-char (point-min))))
+      (display-buffer-in-side-window
+       buffer `((side . bottom) (slot . 0)
+                (window-height . ,(lambda (w)
+                                    (fit-window-to-buffer w (/ (frame-height) 3) 3)))
+                (preserve-size . (nil . t))
+                (window-parameters . ((no-other-window . t))))))))
+
 (defun train-time--watch-width (redraw)
   "Call REDRAW whenever the width of the current buffer's window differs.
 REDRAW must set `train-time--width'."
@@ -1192,7 +1250,7 @@ Clicking a destination does the same."
          (minutes (train-time-minutes-until (train-time-arrival-time arrival)
                                             (funcall train-time-now-function))))
     (setq train-time--last-trip id)
-    (train-time--echo
+    (train-time--describe
      (format "%s%s to %s%s\n%s %s (%s), %s%s"
              (string-trim (train-time--route-label arrival))
              (if (string-empty-p service) "" (concat " " service))
@@ -1202,16 +1260,18 @@ Clicking a destination does the same."
              (if (string-empty-p toward) "" (format ", toward %s" toward))
              (if (eq (train-time-arrival-event arrival) 'departure) "Departs" "Arrives")
              ;; A phone's echo area has room for a few short lines only.
-             (format-time-string (if (train-time--narrow-frame-p)
-                                     "%H:%M"
-                                   "%Y-%m-%d %H:%M:%S %Z")
+             (format-time-string (cond ((not (train-time--narrow-frame-p))
+                                        "%Y-%m-%d %H:%M:%S %Z")
+                                       ((train-time--peek-p) "%H:%M:%S")
+                                       (t "%H:%M"))
                                  (train-time-arrival-time arrival)
                                  train-time-mta-time-zone)
              (train-time--minutes-label minutes)
              (cond ((train-time-arrival-assigned arrival) "tracked train")
-                   ((train-time--narrow-frame-p) "scheduled")
+                   ((and (train-time--narrow-frame-p) (not (train-time--peek-p)))
+                    "scheduled")
                    (t "scheduled, no train assigned yet"))
-             (if (train-time--narrow-frame-p)
+             (if (and (train-time--narrow-frame-p) (not (train-time--peek-p)))
                  ""
                (format "\nTrip %s, platform %s, train %s"
                        (train-time-arrival-trip-id arrival)

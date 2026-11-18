@@ -497,6 +497,10 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   =train-time-touch-bar= to =t= or =nil= to force it.  A bar too long
   for the window keeps to one row ending in =More…=, which shows the
   rest; set =train-time-touch-bar-rows= to =nil= to wrap it instead.
+- *Train details*, from tapping a train or a trip, open in a small
+  window at the bottom that stays until =Close ✕= or the next tap
+  replaces it; elsewhere they go to the echo area
+  (=train-time-describe-display=).
 - *Taps:*
 
   | Where                | Tap                                          |
@@ -557,7 +561,8 @@ from a board) goes where =train-time-window-layout= says:
 - =train-time-map-board-display= (=auto=, =right=, =below= or =replace=)
 - =train-time-osm-zoom= (16), =train-time-osm-terminal= (=web= or =geo=)
 - =train-time-compact-width= (80), =train-time-touch-bar= (=auto=),
-  =train-time-touch-bar-rows= (1), =train-time-alerts-footer= (=auto=)
+  =train-time-touch-bar-rows= (1), =train-time-alerts-footer= (=auto=),
+  =train-time-describe-display= (=auto=, =echo= or =window=)
 - =train-time-home=, =train-time-work=, =train-time-transfer-time=
   (180 s), =train-time-commute-max-rows= (12)
 - =train-time-show-alerts=, =train-time-alerts-refresh-interval= (120 s)

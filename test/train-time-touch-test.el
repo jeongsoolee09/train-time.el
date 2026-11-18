@@ -208,6 +208,25 @@
       (should (string-match-p "Departs 20[0-9-]+ [0-9:]+ E[SD]T" (car messages)))
       (should (string-match-p "^Trip .*, platform 701S, train " (car messages))))))
 
+(ert-deftest train-time-touch-test-describe-window ()
+  (let ((train-time-compact-width 200)
+        (train-time-describe-display 'window))
+    (train-time-test--with-station "701" #'train-time-test--fixture-fetch
+        train-time-test--fixture-time
+      (delete-other-windows)
+      (let ((board (selected-window)))
+        (train-time-touch-test--tap (+ (train-time-touch-test--find "^ +7 +") 2))
+        ;; The details stay in a window below; the board keeps point.
+        (let ((window (get-buffer-window "*train-time: details*")))
+          (should window)
+          (should (eq (selected-window) board))
+          (should (> (window-pixel-top window) (window-pixel-top board)))
+          (with-current-buffer (window-buffer window)
+            (should (string-match-p "Departs [0-9:]+ (" (buffer-string)))
+            (should (string-match-p "Trip .*, platform 701S" (buffer-string)))))
+        (train-time-close-details)
+        (should-not (get-buffer-window "*train-time: details*"))))))
+
 (ert-deftest train-time-touch-test-echo ()
   (let ((train-time-compact-width 200))
     (let ((messages (train-time-touch-test--capture
