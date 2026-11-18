@@ -154,31 +154,59 @@
                 trips)))
     trips))
 
+(defun train-time-mta-generate--seconds (time)
+  "Return GTFS TIME \"HH:MM:SS\" as seconds; HH may exceed 23."
+  (pcase-let ((`(,h ,m ,s) (mapcar #'string-to-number (split-string time ":"))))
+    (+ (* 3600 h) (* 60 m) s)))
+
+(defun train-time-mta-generate--weighted-median (samples)
+  "Return the weighted median of SAMPLES, a list of (VALUE . WEIGHT)."
+  (let* ((sorted (sort (copy-sequence samples) (lambda (a b) (< (car a) (car b)))))
+         (half (/ (apply #'+ (mapcar #'cdr sorted)) 2.0))
+         (sum 0))
+    (cl-loop for (value . weight) in sorted
+             do (cl-incf sum weight)
+             when (>= sum half) return value)))
+
 (defun train-time-mta-generate--patterns (dir trips weights)
-  "Return (PATTERNS . STATION-ROUTES) from stop_times.txt in DIR.
+  "Return (PATTERNS STATION-ROUTES SEGMENTS) from stop_times.txt in DIR.
 PATTERNS maps (ROUTE . STOPS) to weekly trips, STOPS in southbound
-order.  STATION-ROUTES maps a parent stop to the routes calling there."
+order.  STATION-ROUTES maps a parent stop to the routes calling there.
+SEGMENTS maps (ROUTE DIRECTION FROM TO) to (SECONDS . WEEKLY-TRIPS)
+samples: the time from a train's arrival at parent stop FROM to its
+arrival at the next stop TO, for each trip."
   (let ((patterns (make-hash-table :test #'equal))
         (station-routes (make-hash-table :test #'equal))
+        (segments (make-hash-table :test #'equal))
         (current nil) (calls nil))
     (cl-flet ((finish ()
                 (when current
-                  (let* ((platforms (mapcar #'cdr (sort calls (lambda (a b) (< (car a) (car b))))))
+                  (let* ((sorted (sort calls (lambda (a b) (< (car a) (car b)))))
+                         (platforms (mapcar #'cadr sorted))
                          (stops (mapcar (lambda (p) (substring p 0 -1)) platforms))
                          (trip (gethash current trips))
-                         (route (car trip)))
-                    (when (string-suffix-p "N" (car platforms))
+                         (route (car trip))
+                         (weight (gethash (cdr trip) weights 1))
+                         (direction (if (string-suffix-p "N" (car platforms)) 'north 'south)))
+                    (cl-loop for (a b) on sorted
+                             while b
+                             do (push (cons (- (nth 2 b) (nth 2 a)) weight)
+                                      (gethash (list route direction
+                                                     (substring (nth 1 a) 0 -1)
+                                                     (substring (nth 1 b) 0 -1))
+                                               segments)))
+                    (when (eq direction 'north)
                       (setq stops (nreverse stops)))
                     (dolist (s stops)
                       (cl-pushnew route (gethash s station-routes) :test #'equal))
-                    (cl-incf (gethash (cons route stops) patterns 0)
-                             (gethash (cdr trip) weights 1))))))
+                    (cl-incf (gethash (cons route stops) patterns 0) weight)))))
       (with-temp-buffer
         (insert-file-contents (expand-file-name "stop_times.txt" dir))
         (goto-char (point-min))
         (let* ((header (split-string (buffer-substring (point) (line-end-position)) ","))
                (trip-i (cl-position "trip_id" header :test #'equal))
                (stop-i (cl-position "stop_id" header :test #'equal))
+               (arrival-i (cl-position "arrival_time" header :test #'equal))
                (seq-i (cl-position "stop_sequence" header :test #'equal)))
           (forward-line 1)
           (while (not (eobp))
@@ -187,10 +215,13 @@ order.  STATION-ROUTES maps a parent stop to the routes calling there."
                 (unless (equal (nth trip-i f) current)
                   (finish)
                   (setq current (nth trip-i f) calls nil))
-                (push (cons (string-to-number (nth seq-i f)) (nth stop-i f)) calls)))
+                (push (list (string-to-number (nth seq-i f))
+                            (nth stop-i f)
+                            (train-time-mta-generate--seconds (nth arrival-i f)))
+                      calls)))
             (forward-line 1))
           (finish))))
-    (cons patterns station-routes)))
+    (list patterns station-routes segments)))
 
 ;;;; Choosing patterns
 
@@ -303,7 +334,17 @@ between two shared stops just above the later one."
                  gtfs-dir
                  (train-time-mta-generate--trips gtfs-dir)
                  (train-time-mta-generate--service-weights gtfs-dir)))
-         (station-routes (cdr found))
+         (station-routes (nth 1 found))
+         (segments (let (result)
+                     (maphash (lambda (key samples)
+                                (push (append key
+                                              (list (train-time-mta-generate--weighted-median
+                                                     samples)
+                                                    (apply #'+ (mapcar #'cdr samples))))
+                                      result))
+                              (nth 2 found))
+                     (sort result (lambda (a b) (string< (format "%S" (seq-take a 4))
+                                                         (format "%S" (seq-take b 4)))))))
          (by-family (make-hash-table :test #'equal))
          (version (train-time-mta-generate--version gtfs-dir))
          (route-order (lambda (ids)
@@ -376,6 +417,13 @@ DAYTIME-ROUTES ROUTES).  ROUTES lists every route scheduled to stop.\")\n\n")
 :rows orders the stations for drawing.  Each column is a stopping
 pattern (:route :from :to :share :stops): stops in southbound order,
 :share the percentage of the line's weekly scheduled trips.\")\n\n")
+        (insert "(defconst train-time-mta-data-segments\n  '(")
+        (dolist (s segments)
+          (insert (format "\n    %S" s)))
+        (insert ")\n  \"Scheduled run times: (ROUTE-ID DIRECTION FROM TO SECONDS TRIPS).
+A train of ROUTE-ID going DIRECTION (`north' or `south') arrives at
+station TO next after station FROM, typically SECONDS later (the
+median over the schedule's trips).  TRIPS counts those trips per week.\")\n\n")
         (insert "(provide 'train-time-mta-data)\n;;; train-time-mta-data.el ends here\n")))
     (message "Wrote %s: %d stations, %d routes, %d lines"
              output (length stations) (length routes) (length lines))))

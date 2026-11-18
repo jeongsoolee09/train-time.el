@@ -1222,6 +1222,8 @@ mode body, which runs before Evil picks the buffer's initial state."
   "Remind you some minutes before the train at point arrives." t)
 (autoload 'train-time-cancel-reminder "train-time-remind"
   "Cancel a pending train reminder." t)
+(autoload 'train-time-route "train-time-route"
+  "Show the quickest scheduled journey between two stations." t)
 (declare-function train-time-reminded-p "train-time-remind" (id))
 (declare-function train-time-remind-summary "train-time-remind" (stations))
 

@@ -15,8 +15,10 @@ the style of =undo-tree-visualize=.  =M-x train-time-home-to-work= and
 =M-x train-time-work-to-home= list the next trains between two saved
 stations.  Boards and trips show the service alerts, planned work and
 elevator/escalator outages that concern them, and =M-x
-train-time-alerts= lists a line's alerts in full.  Seoul, Tokyo, favorites, graphical maps and general route
-planning are planned but not implemented yet; see [[*Roadmap][Roadmap]].
+train-time-alerts= lists a line's alerts in full.  =M-x
+train-time-route= plans a journey between any two stations from
+scheduled run times.  Seoul, Tokyo, favorites and graphical maps are
+planned but not implemented yet; see [[*Roadmap][Roadmap]].
 
 * Requirements
 
@@ -401,6 +403,57 @@ also sends them to the desktop; by default it picks the first of:
 =train-time-notify-sound= names the sound (="default"=), or is nil for
 silence.
 
+** Journey planning
+
+=M-x train-time-route= asks for two stations (offering home and work)
+and shows the quickest journey between them in the daytime timetable:
+
+#+begin_example
+ Court Sq (G) → Bedford Av
+ About 14 min, 1 change
+
+  G  Court Sq (G) → Metropolitan Av
+     toward Brooklyn · 4 stops · 9 min
+   Change: walk to Lorimer St (L) (allow 3 min)
+  L  Lorimer St (L) → Bedford Av
+     toward Manhattan · 1 stop · 2 min
+#+end_example
+
+| Key (Emacs / Evil)    | Action                                        |
+|-----------------------+-----------------------------------------------|
+| =RET=                 | Board of the station or leg at point          |
+| =n= =p= / =C-j= =C-k= | Next or previous leg                          |
+| =r=                   | Plan the journey back                         |
+| =s=                   | Plan another journey                          |
+| =A=                   | Service alerts                                |
+| =g= / =g r=           | Plan again (after changing the options below) |
+| =q=                   | Quit                                          |
+
+Station names are links to their boards.  How journeys are planned:
+
+- Run times come from MTA's static timetable: for each route,
+  direction and pair of consecutive stops, the median time from a
+  train's arrival at one stop to its arrival at the next, so time
+  spent standing at stations is included.  Express trains have their
+  own, longer hops.
+- Changing route or direction, at a station or between the stations of
+  a complex, takes =train-time-transfer-time= (180 s), as does
+  starting or ending at another station of the chosen one's complex.
+- Waiting for trains is not included.  To prefer fewer changes,
+  journeys are compared as if each change also cost
+  =train-time-route-change-penalty= (300 s) of waiting; that is not
+  added to the times shown.
+- Each leg shows the most frequent route that is about as quick (at
+  most a fifth or a minute slower), so a 7 rather than the rush-hour
+  <7>, and lists the others ("or <7>").
+- Only the usual daytime service is used: stops a route makes only at
+  night or on weekends (=train-time-route-daytime-only=), and stretches
+  run fewer than =train-time-route-min-trips= (10) times a week, mostly
+  engineering reroutes, are left out.  Service changes in effect today
+  are not known; the footer lists the lines' current alerts.
+- The Staten Island Railway connects to the subway only by ferry, so
+  no journey is found between them.
+
 ** Terminal and Termux
 
 Everything works in a text terminal (=emacs -nw=), including on an
@@ -448,6 +501,8 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   | Navigator: title     | Show another line                            |
   | Navigator: transfer  | Show that line at this station               |
   | Trip list: trip      | Describe each train of the trip              |
+  | Journey: leg         | Open the board where the leg starts          |
+  | Journey: station     | Open that station's board                    |
   | Alerts: alert        | Show or hide its details                     |
   | Footer alert         | Open it in the alerts buffer                 |
   | "(g to retry)" etc.  | Do it                                        |
@@ -479,6 +534,8 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 - =train-time-show-alerts=, =train-time-alerts-refresh-interval= (120 s)
 - =train-time-remind-minutes= (5), =train-time-remind-interval= (30 s),
   =train-time-notify-function=, =train-time-notify-sound=
+- =train-time-route-change-penalty= (300 s),
+  =train-time-route-daytime-only= (t), =train-time-route-min-trips= (10)
 - =train-time-evil-bindings=
 
 * Design
@@ -488,7 +545,7 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 | =train-time-pb.el=       | Schema-driven Protocol Buffers wire-format decoder        |
 | =train-time-gtfs-rt.el=  | GTFS-Realtime schema (+ NYCT extensions) and helpers      |
 | =train-time-core.el=     | Backend-independent records (station, arrival), time fns  |
-| =train-time-mta-data.el= | Generated: MTA stations, routes, colors, line patterns    |
+| =train-time-mta-data.el= | Generated: stations, routes, line patterns, run times     |
 | =train-time-mta.el=      | MTA feeds per route, stations, lines, feed → arrivals     |
 | =train-time.el=          | Commands, =tabulated-list-mode= UI, async HTTP, refresh   |
 | =train-time-map.el=      | =M-x train-time-map= text network navigator               |
@@ -496,6 +553,7 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 | =train-time-commute.el=  | Home/work trips: one-change search over live trip updates |
 | =train-time-alerts.el=   | Service alerts and elevator outages: cache, footers, list |
 | =train-time-remind.el=   | Train reminders and desktop notifications                 |
+| =train-time-route.el=    | Journey planning: Dijkstra over scheduled run times       |
 
 Principles kept so far:
 
@@ -531,7 +589,9 @@ line) it turns every scheduled trip into its sequence of stations,
 weights it by the days a week it runs, drops short turns, merges
 patterns that differ by one or two stops, and keeps each route's most
 frequent pattern plus others with at least 5% of trips (four at most).
-The file records the GTFS feed version it was built from, shown at
+It also records, for each route, direction and pair of consecutive
+stops, the median time between a train's arrivals at the two (weighted
+by days a week), for journey planning.  The file records the GTFS feed version it was built from, shown at
 the bottom of the navigator.  Regenerate it when MTA publishes a new
 schedule; the output is deterministic.
 
@@ -558,9 +618,9 @@ The generator is tested against a tiny made-up GTFS feed.
 3. *Milestone 5* — graphical schematic maps (SVG first; Canvas to be
    evaluated), GTFS =shapes.txt= geometry for the osm.el view, more
    lines and interchanges in =train-time-map=.
-4. *Later* — =M-x train-route= between any two stations, more than one
-   change, walking transfers and timetable-based (not only real-time)
-   routing.
+4. *Later* — live predictions and alternatives in =M-x
+   train-time-route=, walking transfers between complexes, journeys
+   highlighted in the navigator.
 
 * Data and attribution
 

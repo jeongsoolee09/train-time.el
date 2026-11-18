@@ -134,8 +134,21 @@
                              '("901" "902" "903")))
               (should (equal (mapcar (lambda (c) (plist-get c :share))
                                      (plist-get line :columns))
-                             '(54.5 45.5))))))
+                            '(54.5 45.5))))
+            ;; Weekly trips: Weekday trains run 5 days, Sunday ones 1.
+            (should (equal (alist-get 'train-time-mta-data-segments data)
+                           '(("9" north "902" "901" 120 1)
+                             ("9" north "903" "902" 120 1)
+                             ("9" south "901" "902" 120 5)
+                             ("9" south "902" "903" 120 5)
+                             ("9X" south "901" "903" 180 5))))))
       (delete-directory dir t))))
+
+(ert-deftest train-time-mta-generate-test-times ()
+  (should (= (train-time-mta-generate--seconds "08:02:30") 28950))
+  (should (= (train-time-mta-generate--seconds "25:00:00") 90000))
+  (should (= (train-time-mta-generate--weighted-median '((60 . 1) (90 . 1) (120 . 1))) 90))
+  (should (= (train-time-mta-generate--weighted-median '((60 . 1) (90 . 1) (120 . 5))) 120)))
 
 (provide 'train-time-mta-generate-test)
 ;;; train-time-mta-generate-test.el ends here
