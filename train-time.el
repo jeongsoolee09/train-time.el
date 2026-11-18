@@ -188,6 +188,14 @@ See `train-time-window-layout'."
   :type 'natnum
   :group 'train-time)
 
+(defcustom train-time-touch-bar-rows 1
+  "How many rows the touch bar takes, if it does not fit on one.
+1 shows the buttons fitting on one row and a More button showing the
+rest; nil wraps the bar onto as many rows as it takes."
+  :type '(choice (const :tag "One row and More" 1)
+                 (const :tag "As many as it takes" nil))
+  :group 'train-time)
+
 (defvar train-time-fetch-function #'train-time-http-fetch
   "Function used to fetch feeds, called as (FUNCTION URL CALLBACK).
 CALLBACK receives a plist with either :data (unibyte string) or
@@ -317,28 +325,59 @@ PROPS are more button properties, such as `face' or `help-echo'."
       (or (eq system-type 'android) (not (display-graphic-p)))
     train-time-touch-bar))
 
+(defvar-local train-time--touch-bar-open nil
+  "Non-nil if this buffer's touch bar shows all its buttons.")
+
+(defun train-time-touch-bar-more ()
+  "Show all the buttons of the touch bar, or only one row of them."
+  (interactive)
+  (setq train-time--touch-bar-open (not train-time--touch-bar-open))
+  (when train-time--redraw-function
+    (funcall train-time--redraw-function)))
+
 (defun train-time--touch-bar (items)
   "Return a touch bar of ITEMS ending in a newline, or \"\" if there is none.
-ITEMS are (LABEL COMMAND) lists; the bar wraps at the window width."
+ITEMS are (LABEL COMMAND) lists.  The bar wraps at the window width,
+or with `train-time-touch-bar-rows' 1 keeps to one row, ending in a
+button showing the rest."
   (if (not (train-time--touch-bar-p))
       ""
-    (let ((width (train-time--window-width))
-          (column 1)
-          (parts (list " ")))
-      (dolist (item items)
-        (let ((button (train-time--button (format " %s " (car item)) (cadr item)
-                                          'face 'train-time-touch-button
-                                          'train-time-touch-bar t)))
-          ;; The last column of a terminal window holds the wrap indicator.
-          (when (and (> column 1) (>= (+ column 1 (string-width button)) width))
+    (let* ((width (train-time--window-width))
+           (button (lambda (label command)
+                     (train-time--button (format " %s " label) command
+                                         'face 'train-time-touch-button
+                                         'train-time-touch-bar t)))
+           (more (funcall button (if train-time--touch-bar-open "Less" "More…")
+                          #'train-time-touch-bar-more))
+           ;; The last column of a terminal window holds the wrap indicator.
+           (fits (lambda (items extra)
+                   (< (+ 1 (apply #'+ (mapcar (lambda (i) (+ 2 (string-width (car i))))
+                                              items))
+                         (max 0 (1- (length items)))
+                         extra)
+                      width)))
+           (one-row (and (eql train-time-touch-bar-rows 1)
+                         (not (funcall fits items 0)))))
+      (when (and one-row (not train-time--touch-bar-open))
+        (let ((shown nil))
+          (while (and items
+                      (funcall fits (append shown (list (car items)))
+                               (1+ (string-width more))))
+            (setq shown (append shown (list (pop items)))))
+          (setq items shown)))
+      (let ((column 1)
+            (parts (list " ")))
+        (dolist (b (append (mapcar (lambda (i) (funcall button (car i) (cadr i))) items)
+                           (and one-row (list more))))
+          (when (and (> column 1) (>= (+ column 1 (string-width b)) width))
             (push "\n " parts)
             (setq column 1))
           (when (> column 1)
             (push " " parts)
             (cl-incf column))
-          (push button parts)
-          (cl-incf column (string-width button))))
-      (concat (apply #'concat (nreverse parts)) "\n"))))
+          (push b parts)
+          (cl-incf column (string-width b)))
+        (concat (apply #'concat (nreverse parts)) "\n")))))
 
 (defun train-time--skip-touch-bar ()
   "Move point past the touch bar if it is on it."
@@ -677,6 +716,42 @@ STATIONS are the stations shown, which leave out other stations' notices."
          (propertize (format " ⚠%d" count) 'face 'warning
                      'help-echo "Service alerts in effect"))))
 
+(defun train-time--header-alerts (event)
+  "Show the alerts of the board whose header line EVENT clicked."
+  (interactive "e")
+  (select-window (posn-window (event-start event)))
+  (call-interactively #'train-time-alerts))
+
+(defun train-time--header-status (now)
+  "Return a header line telling the data's age and alerts at NOW.
+The compact layout shows it instead of column titles, so that a
+phone keeps it in view."
+  (let* ((age (and train-time--feed-time (- now train-time--feed-time)))
+         (alerts (train-time--alerts-mode-line (train-time--routes)
+                                               train-time--stations now)))
+    (concat
+     " "
+     (cond (train-time--loading "Updating…")
+           (train-time--error (propertize "Update failed" 'face 'train-time-error))
+           (age (format "%s · %s old"
+                        (format-time-string "%H:%M:%S" train-time--feed-time
+                                            train-time-mta-time-zone)
+                        (if (< age 120)
+                            (format "%ds" (max 0 age))
+                          (format "%dm" (/ age 60)))))
+           (t "No data yet"))
+     (and age (> age train-time-stale-threshold)
+          (propertize " · STALE" 'face 'train-time-stale))
+     (and alerts
+          (propertize (concat " ·" alerts)
+                      'face 'warning
+                      'mouse-face 'mode-line-highlight
+                      'help-echo "mouse-1: show the alerts"
+                      'local-map (let ((map (make-sparse-keymap)))
+                                   (define-key map [header-line mouse-1]
+                                               #'train-time--header-alerts)
+                                   map))))))
+
 (defun train-time--complex-p ()
   "Return non-nil if this board lists several stations of a complex."
   (cdr train-time--stations))
@@ -810,15 +885,16 @@ Set `tabulated-list-entries' to the entries printed."
 (defun train-time--board-bar ()
   "Return the touch bar of a board."
   (train-time--touch-bar
+   ;; The commonest first, since a narrow bar shows only one row.
    `(("Refresh" train-time-refresh)
-     (,(if train-time--timer "Auto: on" "Auto: off") train-time-toggle-auto-refresh)
+     ,@(and train-time--filters '(("Clear" train-time-clear-filters)))
      ("Station" train-time-select-station)
+     ("Alerts" train-time-alerts)
+     ("Map" train-time-map)
      ("Line" train-time-filter-line)
      ("Direction" train-time-filter-direction)
-     ,@(and train-time--filters '(("Clear" train-time-clear-filters)))
-     ("Alerts" train-time-alerts)
      ("Remind" train-time-remind)
-     ("Map" train-time-map)
+     (,(if train-time--timer "Auto: on" "Auto: off") train-time-toggle-auto-refresh)
      ("OSM" train-time-osm)
      ("Quit" quit-window))))
 
@@ -870,6 +946,9 @@ Set `tabulated-list-entries' to the entries printed."
                          " stale"))
                   (train-time--alerts-mode-line (train-time--routes)
                                                 train-time--stations now)))
+    (when train-time--compact
+      (setq header-line-format
+            (replace-regexp-in-string "%" "%%" (train-time--header-status now))))
     (force-mode-line-update)))
 
 ;;;; Fetching

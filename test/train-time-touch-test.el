@@ -66,6 +66,7 @@
     (cl-letf (((symbol-function 'display-graphic-p) #'ignore))
       (should (train-time--touch-bar-p))))
   (let ((train-time-touch-bar t)
+        (train-time-touch-bar-rows nil)
         (called nil))
     (cl-letf (((symbol-function 'train-time--window-width) (lambda () 20)))
       (let ((bar (train-time--touch-bar
@@ -87,6 +88,26 @@
           (goto-char (point-min))
           (train-time--skip-touch-bar)
           (should (looking-at "text")))))))
+
+(ert-deftest train-time-touch-test-touch-bar-one-row ()
+  (let ((train-time-touch-bar t)
+        (train-time-touch-bar-rows 1)
+        (items '(("One" ignore) ("Two" ignore) ("Three" ignore))))
+    (cl-letf (((symbol-function 'train-time--window-width) (lambda () 20)))
+      (with-temp-buffer
+        ;; Room is kept for More, which shows the rest.
+        (should (equal (substring-no-properties (train-time--touch-bar items))
+                       "  One   More… \n"))
+        (let ((redrawn nil))
+          (setq train-time--redraw-function (lambda () (setq redrawn t)))
+          (train-time-touch-bar-more)
+          (should redrawn))
+        (should (equal (substring-no-properties (train-time--touch-bar items))
+                       "  One   Two \n  Three   Less \n"))
+        ;; A bar that fits needs no More.
+        (should (equal (substring-no-properties
+                        (train-time--touch-bar '(("One" ignore) ("Two" ignore))))
+                       "  One   Two \n"))))))
 
 ;;;; Arrivals board
 

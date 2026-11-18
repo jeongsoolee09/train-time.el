@@ -307,6 +307,26 @@
       (should (string-match-p "Escalator ES607X" text)))
     (should (string-match-p "⚠6" mode-line-process))))
 
+(ert-deftest train-time-alerts-test-board-brief ()
+  (train-time-alerts-test--with
+    (let ((train-time-compact-width 200)
+          (train-time-touch-bar t))
+      (train-time (train-time-mta-station "725"))
+      (let ((text (train-time-test--text))
+            (width (window-body-width)))
+        (should (string-match-p "Service alerts in effect (6):" text))
+        ;; One line an alert, cut to the window, and counts for the rest.
+        (should (string-match-p "^ +R +Delays: Bay Ridge" text))
+        (should-not (string-match-p "Elevator EL290X" text))
+        (should (string-match-p "^84 planned · 2 outages ♿ · All ▸$" text))
+        (dolist (line (split-string text "\n"))
+          (should (< (string-width line) width))))
+      ;; The header line keeps the data's age and the alerts in view.
+      (should (string-match-p "STALE · ⚠6" header-line-format))
+      (let ((train-time-alerts-footer 'full))
+        (train-time--render)
+        (should (string-match-p "Elevator EL290X" (train-time-test--text)))))))
+
 (ert-deftest train-time-alerts-test-board-disabled ()
   (train-time-alerts-test--with
     (let ((train-time-show-alerts nil))

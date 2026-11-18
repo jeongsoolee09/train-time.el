@@ -39,6 +39,18 @@
   :type 'natnum
   :group 'train-time)
 
+(defcustom train-time-alerts-footer 'auto
+  "How boards, trip lists and journey plans summarize alerts at the end.
+`full' lists every alert in effect and every elevator or escalator
+outage at the stations, filled to the window.  `brief' gives each
+alert in effect one line, cut to the window, and counts planned
+work and outages on one more.  `auto' is brief in the compact
+layout, as on a phone, and full otherwise."
+  :type '(choice (const :tag "Brief in narrow windows" auto)
+                 (const :tag "Full" full)
+                 (const :tag "Brief" brief))
+  :group 'train-time)
+
 (defface train-time-alert '((t :inherit warning))
   "Face for the kind of alerts in effect.")
 
@@ -296,10 +308,57 @@ TEXT keeps its own faces; the link only highlights under the mouse."
                 (format ": %s" (downcase (plist-get outage :reason)))
               ""))))
 
+(defun train-time-alerts--brief-p ()
+  "Return non-nil if the current buffer's footer summarizes alerts briefly.
+See `train-time-alerts-footer'."
+  (pcase train-time-alerts-footer
+    ('brief t)
+    ('auto train-time--compact)))
+
+(defun train-time-alerts--brief-summary (routes current planned outages width)
+  "Return a footer of one line per alert in CURRENT, then one more.
+That line counts PLANNED alerts and OUTAGES and links to the alerts
+of ROUTES; alert lines are cut to WIDTH and link to their alert."
+  (let* ((ada (cl-count-if (lambda (o) (plist-get o :ada)) outages))
+         (counts (delq nil
+                       (list (and planned (format "%d planned" (length planned)))
+                             (and outages
+                                  (format "%d outage%s%s" (length outages)
+                                          (if (cdr outages) "s" "")
+                                          (if (> ada 0) " ♿" "")))))))
+    (concat
+     (if current
+         (concat
+          (propertize (format "Service alerts in effect (%d):" (length current))
+                      'face 'train-time-alert)
+          (mapconcat (lambda (alert)
+                       (concat "\n" (train-time-alerts--link
+                                     (truncate-string-to-width
+                                      (concat " " (train-time-alerts--routes-bullets alert)
+                                              " "
+                                              (train-time-alerts--kind alert)
+                                              ": "
+                                              (train-time-alerts--bulletize
+                                               (or (train-time-alert-header alert) "")))
+                                      width nil nil "…")
+                                     routes alert)))
+                     current ""))
+       "No service alerts in effect for these lines.")
+     "\n"
+     (train-time-alerts--link
+      (concat (string-join counts " · ")
+              (if counts " · " "")
+              (if (train-time--touch-bar-p)
+                  "All ▸"
+                (substitute-command-keys
+                 "\\<train-time-mode-map>\\[train-time-alerts]: all")))
+      routes))))
+
 (defun train-time-alerts-summary (routes stations now)
   "Return a footer describing alerts for ROUTES and outages at STATIONS.
 ROUTES are route IDs and STATIONS `train-time-station's; NOW is the
-current time.  Return nil before anything has been downloaded."
+current time.  Return nil before anything has been downloaded.
+In narrow windows the footer can be brief; see `train-time-alerts-footer'."
   (when (assq 'alerts train-time-alerts--cache)
     (pcase-let* ((width (train-time-alerts--width))
                  (`(,current . ,planned)
@@ -309,6 +368,12 @@ current time.  Return nil before anything has been downloaded."
                            (delete-dups (mapcar #'train-time-station-complex stations))))
                  (errors (delq nil (mapcar #'train-time-alerts--error
                                            '(alerts outages equipment)))))
+      (if (train-time-alerts--brief-p)
+          (concat (train-time-alerts--brief-summary routes current planned outages width)
+                  (when errors
+                    (concat "\n" (propertize (format "Alerts unavailable: %s"
+                                                     (string-join errors "; "))
+                                             'face 'train-time-error))))
       (concat
        (if current
            (concat
@@ -350,7 +415,7 @@ current time.  Return nil before anything has been downloaded."
             "Tap here, or on an alert, for the lines' alerts."
           (substitute-command-keys
            "\\<train-time-mode-map>\\[train-time-alerts] lists the lines' alerts."))
-        routes)))))
+        routes))))))
 
 (defun train-time-alerts-count (routes stations now)
   "Return how many alerts for ROUTES and STATIONS are in effect at NOW.
@@ -441,7 +506,10 @@ The alert also stays at the same height in the window showing it."
                ("Details" train-time-alerts-toggle-all)
                ("Lines" train-time-alerts-choose-lines)
                ("Quit" quit-window)))
-            "\n " (propertize (train-time-alerts--title) 'face 'train-time-alert-heading)
+            "\n"
+            (propertize (train-time--hang (concat " " (train-time-alerts--title))
+                                          (max 20 (1- window-width)) 1)
+                        'face 'train-time-alert-heading)
             "\n\n")
     (pcase-dolist (`(,title . ,alerts) `(("In effect now" . ,(car selection))
                                          ("Planned" . ,(cdr selection))))

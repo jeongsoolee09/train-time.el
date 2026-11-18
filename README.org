@@ -479,7 +479,10 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 - *Narrow windows* (under =train-time-compact-width=, 80 columns) get a
   compact layout: boards show Line, Destination, Time and In, grouped
   by direction; trip lists drop Travel and Status; text is filled to
-  the window.  Buffers redraw when their window is resized.
+  the window.  Buffers redraw when their window is resized.  A board's
+  header line then tells the data's age instead of the column titles
+  (=16:12:42 · 18m old · STALE · ⚠6=; tap =⚠6= for the alerts), and
+  the alerts at the end get one line each (=train-time-alerts-footer=).
 - *Phone-width windows* (under 44 columns, e.g. a portrait phone) also
   drop the clock columns — boards show Line, Destination and In, trip
   lists In, Trains, Change at and Arrive; tap a row for exact times.
@@ -489,7 +492,9 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   commands (Refresh, Station, Line, Direction, Alerts, Remind, Map,
   OSM, Quit and so on); Remind acts on the train last tapped.  It is
   shown in text terminals and on Android; set
-  =train-time-touch-bar= to =t= or =nil= to force it.
+  =train-time-touch-bar= to =t= or =nil= to force it.  A bar too long
+  for the window keeps to one row ending in =More…=, which shows the
+  rest; set =train-time-touch-bar-rows= to =nil= to wrap it instead.
 - *Taps:*
 
   | Where                | Tap                                          |
@@ -511,8 +516,9 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 - Commands that ask for a station or line complete in the minibuffer:
   press =TAB= and tap a candidate in =*Completions*=.  Completion
   ignores case, so =times= finds "Times Sq-42 St".
-- From a navigator under 80 columns wide, the board opens below it
-  rather than to its right.
+- On a phone, buffers opened from another (the board from the
+  navigator, alerts, …) take its window, and =q= goes back; see
+  [[*Windows][Windows]].
 - =m= opens OpenStreetMap in the browser or a map app (see above).
 
 ** Windows
@@ -548,7 +554,8 @@ from a board) goes where =train-time-window-layout= says:
   =train-time-split-width= (70), =train-time-split-height= (16)
 - =train-time-map-board-display= (=auto=, =right=, =below= or =replace=)
 - =train-time-osm-zoom= (16), =train-time-osm-terminal= (=web= or =geo=)
-- =train-time-compact-width= (80), =train-time-touch-bar= (=auto=)
+- =train-time-compact-width= (80), =train-time-touch-bar= (=auto=),
+  =train-time-touch-bar-rows= (1), =train-time-alerts-footer= (=auto=)
 - =train-time-home=, =train-time-work=, =train-time-transfer-time=
   (180 s), =train-time-commute-max-rows= (12)
 - =train-time-show-alerts=, =train-time-alerts-refresh-interval= (120 s)
