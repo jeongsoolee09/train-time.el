@@ -1,5 +1,5 @@
 EMACS ?= emacs
-SRCS = train-time-pb.el train-time-core.el train-time-gtfs-rt.el train-time-mta-data.el train-time-mta.el train-time.el train-time-map.el train-time-osm.el train-time-commute.el train-time-alerts.el
+SRCS = train-time-pb.el train-time-core.el train-time-gtfs-rt.el train-time-mta-data.el train-time-mta.el train-time.el train-time-map.el train-time-osm.el train-time-commute.el train-time-alerts.el train-time-remind.el
 
 .PHONY: all compile test clean data
 
@@ -12,7 +12,7 @@ compile:
 	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' -f batch-byte-compile $(SRCS)
 
 test:
-	$(EMACS) -Q --batch -L . -L test -l test/train-time-test.el -l test/train-time-map-test.el -l test/train-time-osm-test.el -l test/train-time-commute-test.el -l test/train-time-alerts-test.el -l test/train-time-touch-test.el -l test/train-time-mta-generate-test.el -f ert-run-tests-batch-and-exit
+	$(EMACS) -Q --batch -L . -L test -l test/train-time-test.el -l test/train-time-map-test.el -l test/train-time-osm-test.el -l test/train-time-commute-test.el -l test/train-time-alerts-test.el -l test/train-time-touch-test.el -l test/train-time-remind-test.el -l test/train-time-mta-generate-test.el -f ert-run-tests-batch-and-exit
 
 clean:
 	rm -f *.elc test/*.elc

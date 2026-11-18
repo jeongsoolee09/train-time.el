@@ -72,6 +72,7 @@ variants); it is blank for the others.
 | =m=   | Show the station on OpenStreetMap    |
 | =D=   | Open the board of the destination    |
 | =A=   | List the service alerts of the lines |
+| =R=   | Remind me before this train arrives  |
 | =q=   | Quit window                          |
 
 *Evil users:* when Evil is loaded the buffer starts in normal state,
@@ -167,16 +168,16 @@ transfers: other lines stopping there or elsewhere in the same station
 complex, e.g. at Times Sq-42 St (7) "N Q R W 1 2 3 S, A C E (42
 St-Port Authority Bus Terminal)".
 
-| Key                  | Evil       | Command                                    |
-|----------------------+------------+--------------------------------------------|
-| =C-n= / =C-p=        | =j= / =k=  | Next / previous stop on the selected service |
-| =C-f= / =C-b=        | =l= / =h=  | Switch to the service right / left           |
-| =M-<= / =M->=        | =gg= / =G= | First / last stop                            |
-| =RET=                | =RET=      | Open the station's arrivals board            |
-| =L=                  | =L=        | Show another line                            |
-| =t=                  | =t=        | Transfer to another line at this station     |
-| =m=                  | =m=        | Show the station on OpenStreetMap            |
-| =q=                  | =q=        | Quit                                         |
+| Key           | Evil       | Command                                      |
+|---------------+------------+----------------------------------------------|
+| =C-n= / =C-p= | =j= / =k=  | Next / previous stop on the selected service |
+| =C-f= / =C-b= | =l= / =h=  | Switch to the service right / left           |
+| =M-<= / =M->= | =gg= / =G= | First / last stop                            |
+| =RET=         | =RET=      | Open the station's arrivals board            |
+| =L=           | =L=        | Show another line                            |
+| =t=           | =t=        | Transfer to another line at this station     |
+| =m=           | =m=        | Show the station on OpenStreetMap            |
+| =q=           | =q=        | Quit                                         |
 
 =n=, =p=, =f=, =b= and the arrow keys also move, as in undo-tree.
 Switching to a service that does not stop at the selected station
@@ -252,12 +253,12 @@ Termux this goes through =termux-open-url=; elsewhere through
 
 Set your stations once, then ask for the next trains either way:
 
-| Command                      | Does                                          |
-|------------------------------+-----------------------------------------------|
-| =M-x train-time-set-home=    | Choose your home station and save it          |
-| =M-x train-time-set-work=    | Choose your work station and save it          |
-| =M-x train-time-home-to-work= | Next trips from home to work                 |
-| =M-x train-time-work-to-home= | Next trips from work to home                 |
+| Command                       | Does                                 |
+|-------------------------------+--------------------------------------|
+| =M-x train-time-set-home=     | Choose your home station and save it |
+| =M-x train-time-set-work=     | Choose your work station and save it |
+| =M-x train-time-home-to-work= | Next trips from home to work         |
+| =M-x train-time-work-to-home= | Next trips from work to home         |
 
 The stations are the customizable variables =train-time-home= and
 =train-time-work= (GTFS stop IDs, e.g. ="701"=), saved with Customize;
@@ -277,15 +278,15 @@ buffer looks like:
  16:30   17 min  7 → N     Queensboro Plaza           17:09   39 min Scheduled
 #+end_example
 
-| Key (Emacs / Evil) | Action                                           |
-|--------------------+--------------------------------------------------|
-| =g= / =g r=        | Refresh                                          |
-| =RET=              | Describe each train: direction, times, stations  |
-| =r=                | Reverse: work → home, or home → work             |
+| Key (Emacs / Evil) | Action                                              |
+|--------------------+-----------------------------------------------------|
+| =g= / =g r=        | Refresh                                             |
+| =RET=              | Describe each train: direction, times, stations     |
+| =r=                | Reverse: work → home, or home → work                |
 | =b=                | Board of the station where the trip at point starts |
-| =a=                | Toggle auto refresh                              |
-| =A=                | Service alerts of the trip's lines               |
-| =q=                | Quit                                             |
+| =a=                | Toggle auto refresh                                 |
+| =A=                | Service alerts of the trip's lines                  |
+| =q=                | Quit                                                |
 
 How trips are found:
 
@@ -365,6 +366,41 @@ and
 [[https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2Fnyct_ene_equipments.json][equipment]]
 feeds.
 
+** Train reminders
+
+On a board, =R= on a train asks how many minutes ahead to remind you
+(=train-time-remind-minutes=, 5 by default).  The train gets a =*=
+mark and the board lists the reminder; =R= on it again cancels it, as
+does =M-x train-time-cancel-reminder= from anywhere.
+
+While reminders are pending, the trip's feed is checked every
+=train-time-remind-interval= seconds (30), whether or not a board is
+open, so the reminder follows the train's latest prediction.  When the
+train is due you get a notification such as:
+
+#+begin_example
+7 Local to 34 St-Hudson Yards
+Arrives at Flushing-Main St in 5 min (23:10)
+#+end_example
+
+If the trip drops out of the feed (cancelled, or the train went
+untracked) for three checks in a row, you are told that instead of
+being reminded at a guessed time.  Reminders live in the running Emacs
+only.
+
+Notifications always appear in the echo area.  =train-time-notify-function=
+also sends them to the desktop; by default it picks the first of:
+
+| Notifier                   | Where                                        |
+|----------------------------+----------------------------------------------|
+| =termux-notification=      | Android, with the Termux:API app and package |
+| =terminal-notifier=        | macOS (=brew install terminal-notifier=)     |
+| =osascript=                | macOS, built in                              |
+| D-Bus (=notifications.el=) | GNU/Linux desktops                           |
+
+=train-time-notify-sound= names the sound (="default"=), or is nil for
+silence.
+
 ** Terminal and Termux
 
 Everything works in a text terminal (=emacs -nw=), including on an
@@ -396,24 +432,25 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
   Long headings and legends wrap, long station names end in "…", and
   messages are shortened to fit the echo area.
 - *A touch bar* of buttons at the top of each buffer offers the main
-  commands (Refresh, Station, Line, Direction, Alerts, Map, OSM, Quit
-  and so on).  It is shown in text terminals and on Android; set
+  commands (Refresh, Station, Line, Direction, Alerts, Remind, Map,
+  OSM, Quit and so on); Remind acts on the train last tapped.  It is
+  shown in text terminals and on Android; set
   =train-time-touch-bar= to =t= or =nil= to force it.
 - *Taps:*
 
-  | Where                 | Tap                                           |
-  |-----------------------+-----------------------------------------------|
-  | Board: train          | Describe the train: service, times, trip IDs  |
-  | Board: destination    | Open that station's board                     |
-  | Board: group heading  | More trains, then fold, then back             |
-  | Navigator: station    | Select it; tap again for its board            |
-  | Navigator: legend     | Follow that stopping pattern                  |
-  | Navigator: title      | Show another line                             |
-  | Navigator: transfer   | Show that line at this station                |
-  | Trip list: trip       | Describe each train of the trip               |
-  | Alerts: alert         | Show or hide its details                      |
-  | Footer alert          | Open it in the alerts buffer                  |
-  | "(g to retry)" etc.   | Do it                                         |
+  | Where                | Tap                                          |
+  |----------------------+----------------------------------------------|
+  | Board: train         | Describe the train: service, times, trip IDs |
+  | Board: destination   | Open that station's board                    |
+  | Board: group heading | More trains, then fold, then back            |
+  | Navigator: station   | Select it; tap again for its board           |
+  | Navigator: legend    | Follow that stopping pattern                 |
+  | Navigator: title     | Show another line                            |
+  | Navigator: transfer  | Show that line at this station               |
+  | Trip list: trip      | Describe each train of the trip              |
+  | Alerts: alert        | Show or hide its details                     |
+  | Footer alert         | Open it in the alerts buffer                 |
+  | "(g to retry)" etc.  | Do it                                        |
 
 - Commands that ask for a station or line complete in the minibuffer:
   press =TAB= and tap a candidate in =*Completions*=.  Completion
@@ -440,22 +477,25 @@ clicks too.  Set =COLORTERM=truecolor= for the lines' real colors.
 - =train-time-home=, =train-time-work=, =train-time-transfer-time=
   (180 s), =train-time-commute-max-rows= (12)
 - =train-time-show-alerts=, =train-time-alerts-refresh-interval= (120 s)
+- =train-time-remind-minutes= (5), =train-time-remind-interval= (30 s),
+  =train-time-notify-function=, =train-time-notify-sound=
 - =train-time-evil-bindings=
 
 * Design
 
-| File                    | Role                                                     |
-|-------------------------+----------------------------------------------------------|
-| =train-time-pb.el=      | Schema-driven Protocol Buffers wire-format decoder        |
-| =train-time-gtfs-rt.el= | GTFS-Realtime schema (+ NYCT extensions) and helpers      |
-| =train-time-core.el=    | Backend-independent records (station, arrival), time fns |
-| =train-time-mta-data.el= | Generated: MTA stations, routes, colors, line patterns  |
-| =train-time-mta.el=     | MTA feeds per route, stations, lines, feed → arrivals     |
-| =train-time.el=         | Commands, =tabulated-list-mode= UI, async HTTP, refresh   |
-| =train-time-map.el=     | =M-x train-time-map= text network navigator               |
-| =train-time-osm.el=     | Optional osm.el view: GPX export + =osm-open=/=osm-goto=  |
-| =train-time-commute.el= | Home/work trips: one-change search over live trip updates |
-| =train-time-alerts.el=  | Service alerts and elevator outages: cache, footers, list |
+| File                     | Role                                                      |
+|--------------------------+-----------------------------------------------------------|
+| =train-time-pb.el=       | Schema-driven Protocol Buffers wire-format decoder        |
+| =train-time-gtfs-rt.el=  | GTFS-Realtime schema (+ NYCT extensions) and helpers      |
+| =train-time-core.el=     | Backend-independent records (station, arrival), time fns  |
+| =train-time-mta-data.el= | Generated: MTA stations, routes, colors, line patterns    |
+| =train-time-mta.el=      | MTA feeds per route, stations, lines, feed → arrivals     |
+| =train-time.el=          | Commands, =tabulated-list-mode= UI, async HTTP, refresh   |
+| =train-time-map.el=      | =M-x train-time-map= text network navigator               |
+| =train-time-osm.el=      | Optional osm.el view: GPX export + =osm-open=/=osm-goto=  |
+| =train-time-commute.el=  | Home/work trips: one-change search over live trip updates |
+| =train-time-alerts.el=   | Service alerts and elevator outages: cache, footers, list |
+| =train-time-remind.el=   | Train reminders and desktop notifications                 |
 
 Principles kept so far:
 

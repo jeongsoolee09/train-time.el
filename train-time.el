@@ -393,6 +393,8 @@ hide them; groups not listed show `train-time-group-max-rows'.")
   "Non-nil if the board is drawn in the compact layout.")
 (defvar-local train-time--filters nil
   "Plist of active filters: :direction, :service, :route.")
+(defvar-local train-time--last-trip nil
+  "Entry ID of the train last described, as by a tap.")
 
 ;;;; Rendering
 
@@ -562,6 +564,9 @@ tapping a train still shows its time."
                         (train-time-alerts-summary (train-time--routes)
                                                    train-time--stations now))))
        (when alerts (concat "\n" alerts)))
+     (let ((reminders (and (featurep 'train-time-remind)
+                           (train-time-remind-summary train-time--stations))))
+       (when reminders (concat "\n" reminders)))
      (let ((hidden (and (not train-time--show-terminating)
                         (cl-count-if #'train-time-arrival-terminating
                                      train-time--arrivals))))
@@ -738,6 +743,7 @@ Set `tabulated-list-entries' to the entries printed."
      ("Direction" train-time-filter-direction)
      ,@(and train-time--filters '(("Clear" train-time-clear-filters)))
      ("Alerts" train-time-alerts)
+     ("Remind" train-time-remind)
      ("Map" train-time-map)
      ("OSM" train-time-osm)
      ("Quit" quit-window))))
@@ -763,6 +769,13 @@ Set `tabulated-list-entries' to the entries printed."
       (setq tabulated-list-entries
             (mapcar (lambda (a) (train-time--entry a now)) rows))
       (tabulated-list-print t))
+    (when (featurep 'train-time-remind)
+      (save-excursion
+        (goto-char (point-min))
+        (while (not (eobp))
+          (when (train-time-reminded-p (tabulated-list-get-id))
+            (tabulated-list-put-tag (propertize "*" 'face 'train-time-reminder)))
+          (forward-line 1))))
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (point-max))
@@ -986,6 +999,7 @@ Clicking a destination does the same."
          (toward (train-time--direction-label arrival))
          (minutes (train-time-minutes-until (train-time-arrival-time arrival)
                                             (funcall train-time-now-function))))
+    (setq train-time--last-trip id)
     (train-time--echo
      (format "%s%s to %s%s\n%s %s (%s), %s%s"
              (string-trim (train-time--route-label arrival))
@@ -1137,6 +1151,7 @@ mode body, which runs before Evil picks the buffer's initial state."
     "m" train-time-osm
     "gd" train-time-goto-destination
     "A" train-time-alerts
+    "R" train-time-remind
     ,(kbd "TAB") train-time-cycle-group
     "za" train-time-cycle-group
     ,(kbd "<backtab>") train-time-cycle-all-groups
@@ -1161,6 +1176,7 @@ mode body, which runs before Evil picks the buffer's initial state."
     (define-key map "m" #'train-time-osm)
     (define-key map "D" #'train-time-goto-destination)
     (define-key map "A" #'train-time-alerts)
+    (define-key map "R" #'train-time-remind)
     (define-key map (kbd "TAB") #'train-time-cycle-group)
     (define-key map (kbd "<backtab>") #'train-time-cycle-all-groups)
     (define-key map (kbd "M-n") #'train-time-next-group)
@@ -1202,6 +1218,12 @@ mode body, which runs before Evil picks the buffer's initial state."
   "Make a station your home station." t)
 (autoload 'train-time-set-work "train-time-commute"
   "Make a station your work station." t)
+(autoload 'train-time-remind "train-time-remind"
+  "Remind you some minutes before the train at point arrives." t)
+(autoload 'train-time-cancel-reminder "train-time-remind"
+  "Cancel a pending train reminder." t)
+(declare-function train-time-reminded-p "train-time-remind" (id))
+(declare-function train-time-remind-summary "train-time-remind" (stations))
 
 (defun train-time--station-candidate (station)
   "Return the completion candidate for STATION: its label and routes."
